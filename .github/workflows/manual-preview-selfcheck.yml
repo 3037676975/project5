@@ -78,7 +78,8 @@ jobs:
 
               version = client.get('/deploy-version')
               assert version.status_code == 200
-              assert version.json()['ui'] == 'manual-preview-voice-notes-v1'
+              assert version.json()['ui'] == 'voice-library-retention-v1'
+              assert 'voice-library-table' in version.json()['features']
 
               text1 = '你好，today we test ChatGPT，然后继续聊天。'
               saved = client.put('/admin/previews/text', headers=headers, json={'text': text1})
@@ -124,8 +125,9 @@ jobs:
 
       - name: Verified deploy and no automatic preview workers
         run: |
-          python -m py_compile app/voice_notes.py
+          python -m py_compile app/voice_notes.py app/audio_retention.py
           node --check app/static/preview-admin.js
+          node --check app/static/voice-library.js
           bash -n scripts/auto-deploy.sh
           bash -n scripts/start.sh
           bash -n scripts/stop.sh
@@ -133,8 +135,11 @@ jobs:
           test ! -e scripts/build-voice-previews.py
           ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
           ! grep -q 'nohup.*setup-kokoro-english.sh' scripts/auto-deploy.sh
-          grep -q '代码、端口进程、线上 commit 三层一致' scripts/auto-deploy.sh
+          grep -q '代码、端口新进程、线上 commit、新功能四层一致' scripts/auto-deploy.sh
           grep -q '/deploy-version' scripts/start.sh
+          grep -q 'voice-library.js' scripts/start.sh
+          grep -q 'voice-library-retention-v1' scripts/start.sh
           grep -q 'fuser -n tcp' scripts/stop.sh
           grep -q 'manual-persistent-v1' app/entry.py
           grep -q '/admin/voice-notes' app/voice_notes.py
+          grep -q '/admin/audio-retention' app/audio_retention.py
