@@ -43,21 +43,18 @@ set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/models/voices-v1.1-zh.bin"
 set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/models/config.json"
 chmod 600 .env
 
-echo '[2/3] 配置已写入；保持当前 API 继续运行，先由 worker 自检新版本'
+echo '[2/3] 配置已写入；后台 worker 会先修复/验证模型资产，再执行真实生成测试'
 
-# Do not restart the live API here. bootstrap-runtime.sh verifies the model,
-# creates a real WAV directly, then restarts the API and performs a second real
-# HTTP generation test. A bad commit therefore cannot immediately replace the
-# currently running API before it has passed the deployment checks.
 LOG_FILE="$PROJECT_DIR/logs/bootstrap-runtime.log"
+WORKER="$PROJECT_DIR/scripts/repair-runtime-assets.sh"
 if command -v setsid >/dev/null 2>&1; then
-  nohup setsid bash "$PROJECT_DIR/scripts/bootstrap-runtime.sh" >> "$LOG_FILE" 2>&1 < /dev/null &
+  nohup setsid bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null &
 else
-  nohup bash "$PROJECT_DIR/scripts/bootstrap-runtime.sh" >> "$LOG_FILE" 2>&1 < /dev/null &
+  nohup bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null &
 fi
 BOOT_PID=$!
 disown "$BOOT_PID" 2>/dev/null || true
 
-echo "[3/3] 已启动自检部署 worker PID=${BOOT_PID}"
-echo "[OK] Webhook 立即返回；worker 会按顺序执行：模型校验 → 直连生成 → 重启 API → HTTP 异步生成 → WAV 校验。"
+echo "[3/3] 已启动修复/部署 worker PID=${BOOT_PID}"
+echo '[OK] Webhook 立即返回；worker 顺序：音色包完整性校验/修复 → 模型自检生成 → 重启 API → HTTP 生成验证。'
 exit 0
