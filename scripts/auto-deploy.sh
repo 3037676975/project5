@@ -40,19 +40,65 @@ if ! command -v espeak-ng >/dev/null 2>&1; then
   echo "[WARN] espeak-ng 尚未安装。控制台可以启动，但含英文的 TTS 生成可能失败。"
 fi
 
-# 3) 独立虚拟环境，只在第一次创建
+# 3) 独立虚拟环境 + 自动修复 pip
+# 某些服务器会留下“有 python 但没有 pip”的不完整 .venv；这里自动修复，不再让部署直接失败。
 if [ ! -x .venv/bin/python ]; then
   echo "[3/6] 创建 Python 虚拟环境"
   "$PYTHON_BIN" -m venv .venv
 else
   echo "[3/6] 复用现有 .venv"
 fi
+
+bootstrap_pip() {
+  if .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[3/6] 检测到 .venv 缺少 pip，正在自动修复"
+
+  # 优先使用 Python 自带 ensurepip。
+  if .venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1; then
+    echo "[3/6] 已通过 ensurepip 修复 pip"
+    return 0
+  fi
+
+  # 如果当前虚拟环境本身不完整，重新创建一次。
+  echo "[3/6] ensurepip 不可用，重新创建 .venv"
+  rm -rf .venv
+  "$PYTHON_BIN" -m venv .venv || true
+  if [ -x .venv/bin/python ] && .venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1; then
+    echo "[3/6] 重建 .venv 后 pip 已恢复"
+    return 0
+  fi
+
+  # 最后兜底：从 PyPA 官方 bootstrap 安装 pip。
+  echo "[3/6] 使用 PyPA get-pip.py 兜底安装 pip"
+  TMP_GET_PIP="$(mktemp /tmp/project5-get-pip.XXXXXX.py)"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 https://bootstrap.pypa.io/get-pip.py -o "$TMP_GET_PIP"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$TMP_GET_PIP" https://bootstrap.pypa.io/get-pip.py
+  else
+    echo "[ERROR] 服务器没有 curl/wget，且 Python ensurepip 不可用，无法自动安装 pip。"
+    rm -f "$TMP_GET_PIP"
+    exit 1
+  fi
+  .venv/bin/python "$TMP_GET_PIP"
+  rm -f "$TMP_GET_PIP"
+
+  if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    echo "[ERROR] pip 自动修复失败，请检查服务器 Python venv/ensurepip 安装。"
+    exit 1
+  fi
+}
+
+bootstrap_pip
 .venv/bin/python -m pip install -q --upgrade pip setuptools wheel
 
 # 无 GPU 服务器优先安装 CPU-only PyTorch，避免拉取 CUDA/NVIDIA 大包。
 if ! .venv/bin/python -c 'import torch' >/dev/null 2>&1; then
   echo "[3/6] 安装 CPU-only PyTorch"
-  .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+  .venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 fi
 
 # 4) requirements.txt 没变化就不重复安装，避免每次部署都重装模型依赖
@@ -60,7 +106,7 @@ REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')"
 OLD_HASH="$(cat .requirements.sha256 2>/dev/null || true)"
 if [ "$REQ_HASH" != "$OLD_HASH" ]; then
   echo "[4/6] 依赖有变化，开始安装"
-  .venv/bin/pip install -r requirements.txt
+  .venv/bin/python -m pip install -r requirements.txt
   echo "$REQ_HASH" > .requirements.sha256
 else
   echo "[4/6] requirements 未变化，跳过安装"
