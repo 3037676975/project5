@@ -1,102 +1,49 @@
-# Project5 API：直接复制给 AI 的上下文
+# Project5 TTS API · 直接复制给 AI
 
-> 用法：以后让任何 AI、Agent、代码助手接入 Project5 TTS 时，把这份文档完整复制给它。  
-> 这是一份“机器可理解的调用说明”，不是教程。
+> 以后让任何 AI、Agent、代码助手接入 Project5 时，直接把这份文件完整复制给它即可。不要让它自己猜接口，也不要让它把 Kokoro / Edge 模型重新塞进业务项目。
 
----
-
-## START — 给 AI 的 Project5 TTS 上下文
+## START — 给 AI 的接入上下文
 
 你正在接入一个已经独立部署好的 TTS 服务：**Project5**。
 
-### 1. 你的目标
-
-不要把 Kokoro 或 Edge 的模型代码复制进业务项目。
-
-正确方式是：
+你的任务是：业务项目通过 HTTP 调用 Project5，把文字转换成语音。
 
 ```text
 业务项目
-→ HTTP 调用 Project5
-→ Project5 负责 TTS
-→ 返回 task_id
-→ 轮询任务状态
-→ completed 后取得 audio_url
+→ POST 提交文字
+→ Project5 返回 task_id
+→ 轮询任务
+→ completed
+→ 取得 audio_url
 ```
 
-Project5 是独立语音服务。
-
----
-
-## 2. 基本配置
+### 连接配置
 
 ```text
-BASE_URL = http://YOUR_PROJECT5_HOST
-API_KEY  = YOUR_API_KEY
+PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST
+PROJECT5_API_KEY=YOUR_API_KEY
 ```
 
-所有需要认证的公开 API 使用：
+所有需要认证的请求都带：
 
 ```http
 Authorization: Bearer YOUR_API_KEY
 ```
 
-JSON 请求使用：
-
-```http
-Content-Type: application/json
-```
-
-不要把真实 API Key 写进公开前端或 GitHub 公共仓库。
+不要把真实 API Key 写进公开前端或公共 GitHub。
 
 ---
 
-## 3. 支持的 TTS 引擎
-
-### Kokoro
+## 1. 支持的引擎
 
 ```text
-engine = kokoro
-```
-
-特点：
-
-```text
-本地 CPU 推理
-输出 WAV
-支持多个 Kokoro voice ID
-适合本地生成
-```
-
-示例 voice：
-
-```text
-zf_001
-```
-
-### Edge
-
-```text
-engine = edge
-```
-
-特点：
-
-```text
-在线 TTS
-输出 MP3
-服务器必须能访问互联网
-```
-
-示例 voice：
-
-```text
-zh-CN-XiaoxiaoNeural
+kokoro = 本地 CPU TTS，通常输出 WAV
+edge   = 在线 Edge TTS，通常输出 MP3
 ```
 
 ---
 
-## 4. 获取音色
+## 2. 获取真实音色 ID
 
 Kokoro：
 
@@ -110,11 +57,18 @@ Edge：
 GET /v1/voices?engine=edge
 ```
 
-程序应读取返回的 voice `id`，不要自己猜 voice ID。
+程序应优先使用这里返回的 `id`，不要自己猜 voice ID。
+
+示例：
+
+```text
+Kokoro: zf_001
+Edge:   zh-CN-XiaoxiaoNeural
+```
 
 ---
 
-## 5. 提交 TTS 任务
+## 3. 提交 TTS 任务
 
 统一接口：
 
@@ -146,22 +100,22 @@ Edge 示例：
 }
 ```
 
-字段：
+参数：
 
 ```text
-input  = 要朗读的文本
+input  = 要朗读的文字
 engine = kokoro 或 edge
-voice  = 音色 ID
-speed  = 语速，通常使用 1.0
+voice  = /v1/voices 返回的音色 ID
+speed  = 语速，默认建议 1.0
 ```
 
 ---
 
-## 6. 提交后不是直接拿音频
+## 4. 这是异步 API
 
-Project5 是异步任务模式。
+`POST /v1/audio/speech` 成功后不是直接返回音频，而是返回 HTTP `202 Accepted` 和任务 ID。
 
-POST 成功后通常返回 HTTP 202，例如：
+示例：
 
 ```json
 {
@@ -172,186 +126,146 @@ POST 成功后通常返回 HTTP 202，例如：
 }
 ```
 
-其中最重要的是：
-
-```text
-id
-```
-
-把它当作 task_id 保存。
-
----
-
-## 7. 查询任务
-
-使用：
+保存 `id`，然后查询：
 
 ```http
-GET /v1/tasks/{task_id}
+GET /v1/tasks/{id}
 Authorization: Bearer YOUR_API_KEY
 ```
 
 状态：
 
 ```text
-queued
-→ processing
-→ completed
+queued → processing → completed
+                     ↘ failed
 ```
 
-失败：
-
-```text
-failed
-```
-
-当状态为 `completed` 时，从响应里读取：
+当 `status == "completed"` 时读取：
 
 ```text
 audio_url
 ```
 
-示例：
+当 `status == "failed"` 时停止轮询并抛出明确错误。
 
-```json
-{
-  "id": "tts_xxxxxxxxx",
-  "status": "completed",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "audio_url": "http://YOUR_PROJECT5_HOST/audio/tts_xxxxxxxxx.wav"
-}
-```
+建议每 `1 秒` 查询一次，并设置总超时，不要无限轮询。
 
 ---
 
-## 8. AI 必须遵守的调用逻辑
+## 5. 你需要实现的封装
 
-实现代码时必须使用下面流程：
+请直接实现以下 3 个函数：
 
 ```text
-1. POST /v1/audio/speech
-2. 检查 HTTP 状态
-3. 读取 task_id
-4. 每隔约 1 秒 GET /v1/tasks/{task_id}
-5. queued / processing → 继续等待
-6. completed → 读取 audio_url
-7. failed → 抛出错误，并输出服务端 error
-8. 设置合理超时，不能无限轮询
+get_voices(engine)
+submit_tts(input, engine, voice, speed=1.0)
+wait_for_task(task_id)
 ```
 
-不要假设 POST 返回后音频已经生成完成。
+业务层只调用这三个封装，不直接接触 Project5 内部模型代码。
+
+完整逻辑：
+
+```text
+输入文字
+↓
+选择 engine
+↓
+确认 voice ID
+↓
+submit_tts()
+↓
+拿 task_id
+↓
+wait_for_task()
+↓
+completed → 返回 audio_url
+failed / timeout → 报错
+```
 
 ---
 
-## 9. Python 参考实现
+## 6. Python 最小实现
 
 ```python
+import os
 import time
 import requests
 
-BASE_URL = "http://YOUR_PROJECT5_HOST"
-API_KEY = "YOUR_API_KEY"
+BASE_URL = os.environ["PROJECT5_BASE_URL"].rstrip("/")
+API_KEY = os.environ["PROJECT5_API_KEY"]
+AUTH = {"Authorization": f"Bearer {API_KEY}"}
 
-headers = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
-}
 
-payload = {
-    "input": "今天学习 ChatGPT and LangChain，然后继续中文。",
-    "engine": "kokoro",
-    "voice": "zf_001",
-    "speed": 1.0,
-}
-
-submit = requests.post(
-    f"{BASE_URL}/v1/audio/speech",
-    headers=headers,
-    json=payload,
-    timeout=30,
-)
-submit.raise_for_status()
-
-task_id = submit.json()["id"]
-
-deadline = time.time() + 300
-
-while time.time() < deadline:
+def get_voices(engine: str):
     r = requests.get(
-        f"{BASE_URL}/v1/tasks/{task_id}",
-        headers=headers,
-        timeout=30,
+        f"{BASE_URL}/v1/voices",
+        params={"engine": engine},
+        headers=AUTH,
+        timeout=10,
     )
     r.raise_for_status()
-    task = r.json()
+    return r.json()
 
-    if task["status"] == "completed":
-        audio_url = task["audio_url"]
-        print(audio_url)
-        break
 
-    if task["status"] == "failed":
-        raise RuntimeError(task.get("error", "Project5 TTS failed"))
+def submit_tts(text: str, engine="kokoro", voice="zf_001", speed=1.0):
+    r = requests.post(
+        f"{BASE_URL}/v1/audio/speech",
+        headers={**AUTH, "Content-Type": "application/json"},
+        json={
+            "input": text,
+            "engine": engine,
+            "voice": voice,
+            "speed": speed,
+        },
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()["id"]
 
-    time.sleep(1)
-else:
-    raise TimeoutError("Project5 TTS task timed out")
+
+def wait_for_task(task_id: str, timeout_seconds=180):
+    deadline = time.time() + timeout_seconds
+
+    while time.time() < deadline:
+        r = requests.get(
+            f"{BASE_URL}/v1/tasks/{task_id}",
+            headers=AUTH,
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        if data["status"] == "completed":
+            return data["audio_url"]
+        if data["status"] == "failed":
+            raise RuntimeError(data)
+
+        time.sleep(1)
+
+    raise TimeoutError("Project5 TTS task timeout")
+
+
+# 示例
+id_ = submit_tts(
+    "今天测试 ChatGPT and LangChain，然后继续中文。",
+    engine="kokoro",
+    voice="zf_001",
+)
+print(wait_for_task(id_))
 ```
 
 ---
 
-## 10. 普通业务项目只依赖这三个公开接口
+## 7. AI 必须遵守的规则
 
-```text
-POST /v1/audio/speech
-GET  /v1/tasks/{id}
-GET  /v1/voices?engine=...
-```
+1. 不要把 `202 Accepted` 当成音频已经生成完成。
+2. 不要假设 POST 会直接返回二进制音频。
+3. 不要自己编造 `voice`，优先读取 `/v1/voices`。
+4. 不要把 API Key 写进前端或公开仓库。
+5. 不要写死 WAV / MP3 后缀，优先使用服务端返回的 `audio_url`。
+6. 如果 Project5 开启了“24 小时自动清理”，需要长期保存的音频应在生成完成后及时下载或复制到业务项目自己的存储。
+7. 任务 `failed` 时记录服务端错误，不要无限自动重试。
+8. 默认测试可以使用 `kokoro + zf_001 + speed=1.0`；需要在线快速生成时可使用 `edge + zh-CN-XiaoxiaoNeural`。
 
-不要让普通业务项目依赖这些管理接口：
-
-```text
-/admin/previews
-/admin/voice-notes
-/admin/audio-retention
-```
-
-这些是 Project5 后台自己的管理功能。
-
----
-
-## 11. 音频文件说明
-
-正式 TTS 音频：
-
-```text
-/audio/...
-```
-
-可能由服务器设置成 24 小时自动清理，所以如果业务项目需要长期保存，应在拿到 `audio_url` 后自行下载或转存。
-
-固定音色试听：
-
-```text
-/static/previews/...
-```
-
-只用于后台比较音色，不应该当作正式业务生成接口。
-
----
-
-## 12. 接入 Project5 时的默认原则
-
-```text
-- 不修改 Project5 内部模型代码，除非用户明确要求。
-- 优先调用现有 HTTP API。
-- voice ID 通过 /v1/voices 获取。
-- Kokoro 和 Edge 共用 /v1/audio/speech。
-- 必须处理异步 task_id。
-- 必须处理 failed 和 timeout。
-- 不把 API Key 暴露到公开前端。
-- 需要长期使用音频时，把 audio_url 对应文件下载到业务项目自己的存储。
-```
-
-## END — 给 AI 的 Project5 TTS 上下文
+## END — 给 AI 的接入上下文
