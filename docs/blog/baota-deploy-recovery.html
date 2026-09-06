@@ -1,0 +1,124 @@
+<div class="p5-deploy-note">
+  <style>
+    .p5-deploy-note{
+      --p5-blue:#2563eb;--p5-blue-soft:#eff6ff;--p5-text:#1f2937;--p5-muted:#64748b;
+      --p5-border:#dbe5f1;--p5-bg:#f8fafc;--p5-green:#059669;--p5-yellow:#b7791f;
+      font-family:"Noto Sans SC","Microsoft YaHei",sans-serif;color:var(--p5-text);
+      line-height:1.8;font-size:16px;
+    }
+    .p5-deploy-note *{box-sizing:border-box}
+    .p5-deploy-note h2{margin:34px 0 14px;font-size:24px;line-height:1.35;color:#0f172a}
+    .p5-deploy-note h3{margin:24px 0 10px;font-size:18px;color:#1e3a8a}
+    .p5-deploy-note p{margin:10px 0}
+    .p5-deploy-note code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .p5-deploy-note .lead{padding:18px 20px;border-left:4px solid var(--p5-blue);background:var(--p5-blue-soft);border-radius:10px}
+    .p5-deploy-note .card{margin:16px 0;padding:18px 20px;border:1px solid var(--p5-border);border-radius:14px;background:#fff}
+    .p5-deploy-note .tip{margin:16px 0;padding:16px 18px;border-radius:12px;background:#fff8e6;border:1px solid #f4d58d}
+    .p5-deploy-note .ok{margin:16px 0;padding:16px 18px;border-radius:12px;background:#ecfdf5;border:1px solid #a7f3d0}
+    .p5-deploy-note pre{overflow:auto;margin:14px 0;padding:16px 18px;border-radius:12px;background:#0f172a;color:#e2e8f0;line-height:1.65;font-size:14px}
+    .p5-deploy-note table{width:100%;border-collapse:separate;border-spacing:0;margin:16px 0;border:1px solid var(--p5-border);border-radius:12px;overflow:hidden;background:#fff}
+    .p5-deploy-note th,.p5-deploy-note td{padding:12px 14px;border-bottom:1px solid var(--p5-border);text-align:left;vertical-align:top}
+    .p5-deploy-note th{background:#f1f5f9;color:#334155}
+    .p5-deploy-note tr:last-child td{border-bottom:0}
+    .p5-deploy-note .flow{display:grid;gap:10px;margin:16px 0}
+    .p5-deploy-note .flow div{padding:12px 14px;border-radius:10px;background:#f8fafc;border:1px solid var(--p5-border)}
+    .p5-deploy-note .summary{margin-top:24px;padding:20px;border-radius:14px;background:#0f172a;color:#e2e8f0}
+    @media(max-width:640px){
+      .p5-deploy-note{font-size:15px}
+      .p5-deploy-note h2{font-size:21px}
+      .p5-deploy-note th,.p5-deploy-note td{padding:10px}
+    }
+  </style>
+
+  <div class="lead">
+    这次 Project5 的问题不是 Git 本身坏了，而是<strong>正常代码部署流程被错误地和 Nginx 自动修改绑在了一起</strong>。
+    最近一次稳定成功的提交是 <code>F4A24EF</code>，对比它和后续失败版本后，问题才真正定位出来。
+  </div>
+
+  <h2>一、当时出现了什么现象</h2>
+  <div class="card">
+    <p>宝塔能看到 Git 提交，甚至日志里已经显示代码拉取成功，但最终部署仍然标红，浏览器里的前端也没有更新。</p>
+    <pre>Git pull 成功
+↓
+8005 新进程启动
+↓
+自动修改宝塔 Nginx
+↓
+nginx -t 报错
+↓
+部署失败
+↓
+公网继续显示旧页面</pre>
+  </div>
+
+  <h2>二、为什么一开始一直没找准</h2>
+  <p>前面一直盯着“Git 有没有拉最新”“8005 有没有旧进程”排查，这两个方向都没错，但不是最终根因。</p>
+  <p>真正有效的办法是：<strong>找到最后一次明确成功的提交，然后和失败版本做差异对比。</strong></p>
+
+  <table>
+    <thead>
+      <tr><th>版本</th><th>部署特点</th><th>结果</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>F4A24EF</code></td><td>宝塔负责 git pull；部署脚本只负责重启程序和验证前端</td><td>成功</td></tr>
+      <tr><td>后续版本</td><td>又增加了自动修改 Nginx、检查公网入口等步骤</td><td>连续失败</td></tr>
+    </tbody>
+  </table>
+
+  <h2>三、真正的根因</h2>
+  <div class="tip">
+    <strong>根因：</strong>把“应用发布”和“基础设施配置修改”放进了同一条自动部署链路。
+  </div>
+  <p>后续脚本会在每次 Git 部署时自动修改宝塔 Nginx 的 <code>location /</code>。真实服务器配置里还有 include、反向代理文件等结构，脚本处理不完整时就会出现：</p>
+  <pre>nginx: [emerg] duplicate location "/"</pre>
+  <p>Nginx 检查失败后脚本会回滚配置，所以服务器不会彻底坏掉，但本次部署会失败，公网入口仍然保持旧状态。</p>
+
+  <h2>四、最终正确的修复方式</h2>
+  <div class="flow">
+    <div>① 宝塔 Git 插件先执行 <code>git pull</code></div>
+    <div>② 部署脚本读取当前 commit</div>
+    <div>③ 杀掉 Project5 旧进程，释放 8005</div>
+    <div>④ 启动当前代码的 <code>app.entry:app</code></div>
+    <div>⑤ 验证前端、静态资源和运行 commit</div>
+    <div>⑥ 模型检查放后台执行，不阻塞网页切换</div>
+  </div>
+
+  <div class="ok">
+    <strong>关键决定：</strong>正常部署不再自动修改 Nginx。Nginx 修复脚本保留，但只作为单独的一次性维护工具，需要时再执行。
+  </div>
+
+  <h2>五、以后遇到同类问题怎么排查</h2>
+  <div class="card">
+    <h3>先找“最后一次成功”</h3>
+    <p>不要从最新失败版本开始猜。先找到最后一次成功 commit，再比较后续修改了哪些部署文件。</p>
+
+    <h3>把部署分成三层</h3>
+    <pre>代码已更新
+≠
+进程已更新
+≠
+用户访问到的新版本</pre>
+
+    <h3>但是不要让每次部署都改基础设施</h3>
+    <p>端口、Nginx、SSL、域名等属于基础设施配置。它们应该独立维护，不应该每一次业务代码提交都自动重写。</p>
+  </div>
+
+  <h2>六、给其他 AI 的排查提示</h2>
+  <pre>如果 Project5 宝塔部署连续失败：
+
+1. 先找到最后一次成功 commit：F4A24EF。
+2. 对比成功版本和当前版本的部署脚本，不要先猜模型或 GitHub 故障。
+3. 正常发布链路只保留：git pull → 停旧进程 → 启动 8005 → 验证当前 commit。
+4. 不要在每次自动部署时修改 Nginx。
+5. 如果需要修 Nginx，把它作为独立维护动作处理。
+6. 判断成功时必须区分：
+   - Git HEAD 是否最新
+   - 8005 是否运行最新 commit
+   - 用户访问入口是否已经指向正确服务
+7. 优先恢复最后一次已知成功的最小部署路径，再逐项增加功能。</pre>
+
+  <div class="summary">
+    <strong>一句话经验：</strong><br>
+    部署系统越关键，越要保持最小化。业务代码发布只负责“拉代码、换进程、验版本”；Nginx 之类的基础设施修改不要混进每一次自动部署。
+  </div>
+</div>
