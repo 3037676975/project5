@@ -1,0 +1,74 @@
+<section class="p5-deploy-note">
+<style>
+.p5-deploy-note{font-family:"Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;color:#27364a;line-height:1.8;font-size:16px}.p5-deploy-note *{box-sizing:border-box}.p5-deploy-note h2{margin:30px 0 14px;font-size:24px;line-height:1.35;color:#163b67}.p5-deploy-note h3{margin:22px 0 10px;font-size:18px;color:#245b8f}.p5-deploy-note p{margin:10px 0}.p5-deploy-note code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.p5-deploy-note .note,.p5-deploy-note .tip,.p5-deploy-note .warn{margin:16px 0;padding:14px 16px;border-radius:12px;background:#f4f8fc;border:1px solid #dbe8f5}.p5-deploy-note .tip{background:#eef8f4;border-color:#cde9dc}.p5-deploy-note .warn{background:#fff8e8;border-color:#f2dfaa}.p5-deploy-note .flow{margin:14px 0;padding:16px;border-radius:12px;background:#142033;color:#e9f1fb;white-space:pre-wrap;overflow:auto}.p5-deploy-note table{width:100%;border-collapse:separate;border-spacing:0;margin:16px 0;border:1px solid #dce6f0;border-radius:12px;overflow:hidden}.p5-deploy-note th,.p5-deploy-note td{padding:11px 12px;text-align:left;border-bottom:1px solid #e7eef5}.p5-deploy-note th{background:#f2f7fb;color:#17466f}.p5-deploy-note tr:last-child td{border-bottom:0}.p5-deploy-note ul{padding-left:22px}.p5-deploy-note strong{color:#153f68}
+</style>
+
+<div class="note"><strong>这次问题的核心：</strong>代码本身没有坏，Git 也能拉取。真正导致连续部署失败的是：后来把“正常代码部署”和“自动修改宝塔 Nginx 配置”绑在了同一个部署脚本里。</div>
+
+<h2>一、当时看到的现象</h2>
+<p>宝塔里连续显示“部署失败”，浏览器还是旧页面，很容易误以为是 <code>git pull</code> 没成功。</p>
+<p>但日志拆开看，其实是三层状态：</p>
+<div class="flow">Git 代码已更新
+≠
+8005 运行进程已更新
+≠
+公网入口已经切到新版本</div>
+<p>排查时不能只看最后的“成功 / 失败”，要先确认到底是哪一层失败。</p>
+
+<h2>二、为什么最后能找到原因</h2>
+<p>关键方法不是继续猜，而是找到<strong>最近一次明确成功的提交</strong>，这里是 <code>F4A24EF</code>，然后和后面的失败版本做差异对比。</p>
+<table>
+<thead><tr><th>成功版本</th><th>后续失败版本</th></tr></thead>
+<tbody>
+<tr><td>宝塔负责先拉 Git</td><td>部署脚本又增加了更多同步和检查逻辑</td></tr>
+<tr><td>脚本只负责停止旧进程、启动新进程、验证页面</td><td>脚本开始自动修改 Nginx</td></tr>
+<tr><td>Nginx 配置不在日常部署里动</td><td>每次提交都可能改 <code>location /</code></td></tr>
+</tbody>
+</table>
+<p>这样就能确定：真正的回归点不是 TTS，也不是 Git，而是<strong>部署职责被扩大了</strong>。</p>
+
+<h2>三、真正的问题</h2>
+<p>宝塔的 Nginx 配置可能有主配置、<code>include</code>、反向代理子配置等多层结构。如果每次代码部署都自动重写这些内容，很容易出现：</p>
+<div class="flow">原来已经有 location /
++
+部署脚本再次生成 location /
+=
+duplicate location "/"
+=
+nginx -t 失败
+=
+宝塔把整次部署标记为失败</div>
+<p>即使脚本后来自动回滚了 Nginx，代码其实可能已经拉到服务器，但这次部署记录仍然会是红色。</p>
+
+<h2>四、最终修复思路</h2>
+<p>最后没有继续给复杂脚本打补丁，而是恢复到最近一次成功版本的部署结构，只保留必要职责：</p>
+<div class="flow">宝塔 Git 插件先 pull
+↓
+停止旧的 8005 进程
+↓
+启动当前代码
+↓
+验证新进程和新页面
+↓
+耗时的模型检查放后台
+↓
+部署完成</div>
+<p><strong>Nginx 修复脚本保留，但从“每次自动部署”里移出去，只作为独立维护工具。</strong></p>
+
+<div class="tip"><strong>最重要的经验：</strong>日常代码发布脚本尽量只做“拉代码 → 重启应用 → 验证应用”。Nginx、证书、防火墙、系统服务这类基础设施配置，不要因为每次业务代码提交而重复修改。</div>
+
+<h2>五、以后让 AI 修类似问题时怎么说</h2>
+<p>可以直接把下面这段给 AI：</p>
+<div class="flow">先不要继续给部署脚本加补丁。
+请找到最近一次明确部署成功的 commit，并和当前失败版本比较部署相关文件。
+分别验证：
+1. Git 是否已经更新；
+2. 旧进程是否已经停止；
+3. 新进程是否正在监听目标端口；
+4. 公网入口是否只是代理问题。
+如果成功版本的部署脚本本来不修改 Nginx，就优先恢复成功版本的部署结构，不要把 Nginx 自动修改绑进每次代码发布。
+原则：代码更新、进程更新、公网页面更新是三件不同的事。</div>
+
+<h2>六、一句话总结</h2>
+<div class="warn"><strong>这次不是“拉取坏了”，而是后来把一个原本简单稳定的部署流程改得过重。</strong>最有效的排查方法，是回到最后一次成功的提交做对比，找到新增职责，再把部署恢复到“简单、可验证、职责单一”的状态。</div>
+</section>
