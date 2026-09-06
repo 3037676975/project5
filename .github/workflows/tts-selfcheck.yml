@@ -33,7 +33,6 @@ jobs:
       - name: Syntax checks
         run: |
           python -m compileall -q app
-          python -m py_compile scripts/build-voice-previews.py
           bash -n scripts/auto-deploy.sh
           bash -n scripts/repair-runtime-assets.sh
           bash -n scripts/bootstrap-runtime.sh
@@ -41,6 +40,8 @@ jobs:
           bash -n scripts/start.sh
           bash -n scripts/stop.sh
           bash -n scripts/restart.sh
+          test ! -e scripts/build-voice-previews.py
+          ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
 
       - name: Official English G2P direct tests
         run: |
