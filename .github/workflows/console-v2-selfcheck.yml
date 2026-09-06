@@ -44,6 +44,7 @@ jobs:
           node --check app/static/preview-admin.js
           node --check app/static/voice-library.js
           node --check app/static/api-docs-beginner.js
+          node --check app/static/api-key-ui.js
 
       - name: Voice library and retention frontend
         run: |
@@ -58,6 +59,16 @@ jobs:
           grep -q 'Project5 双引擎 API' app/static/voice-library.js
           grep -q '/v1/audio/speech' app/static/voice-library.js
           grep -q '/v1/voices?engine=kokoro' app/static/voice-library.js
+
+      - name: API key creation and copy UX
+        run: |
+          grep -q 'api-key-ui.js' app/static/preview-admin.js
+          grep -q '创建 API Key' app/static/api-key-ui.js
+          grep -q '复制 Key' app/static/api-key-ui.js
+          grep -q 'project5_api_keys_local_v1' app/static/api-key-ui.js
+          grep -q "navigator.clipboard" app/static/api-key-ui.js
+          grep -q "document.execCommand('copy')" app/static/api-key-ui.js
+          grep -q '服务器仍然只保存 Key 的哈希值' app/static/api-key-ui.js
 
       - name: Beginner API docs and ETG1 recommendation
         run: |
