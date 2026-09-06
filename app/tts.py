@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -37,8 +38,9 @@ def voice_meta(voice: str) -> dict:
 class KokoroEngine:
     """Lazy-loaded, single-model Kokoro inference engine.
 
-    The process intentionally keeps one model instance in memory. Project5 runs one
-    uvicorn worker by default so an 8 GB CPU server does not load duplicate models.
+    Project5 keeps one model instance in memory. The model is also preloaded in a
+    background thread at service startup so the first browser request does not spend
+    a long time downloading/loading the model behind Nginx.
     """
 
     def __init__(self) -> None:
@@ -46,35 +48,65 @@ class KokoroEngine:
         self.pipeline = None
         self.en_pipeline = None
         self.loaded = False
+        self.loading = False
+        self.load_error: str | None = None
         self.device = os.getenv("KOKORO_DEVICE", "cpu")
+        self._load_lock = threading.Lock()
 
     def load(self) -> None:
         if self.loaded:
             return
 
-        import torch
-        from kokoro import KModel, KPipeline
+        with self._load_lock:
+            if self.loaded:
+                return
+            self.loading = True
+            self.load_error = None
+            print(f"[Project5] Loading Kokoro model: {REPO_ID} on {self.device} ...", flush=True)
+            try:
+                import torch
+                from kokoro import KModel, KPipeline
 
-        threads = int(os.getenv("KOKORO_THREADS", str(min(8, os.cpu_count() or 4))))
-        if self.device == "cpu":
-            torch.set_num_threads(max(1, threads))
+                threads = int(os.getenv("KOKORO_THREADS", str(min(8, os.cpu_count() or 4))))
+                if self.device == "cpu":
+                    torch.set_num_threads(max(1, threads))
 
-        self.model = KModel(repo_id=REPO_ID).to(self.device).eval()
-        # Official v1.1-zh sample uses an English pipeline as the callable for
-        # Latin/English fragments inside Chinese sentences.
-        self.en_pipeline = KPipeline(lang_code="a", repo_id=REPO_ID, model=False)
+                self.model = KModel(repo_id=REPO_ID).to(self.device).eval()
+                # Official v1.1-zh sample uses an English pipeline as the callable for
+                # Latin/English fragments inside Chinese sentences.
+                self.en_pipeline = KPipeline(lang_code="a", repo_id=REPO_ID, model=False)
 
-        def en_callable(text: str) -> str:
-            result = next(self.en_pipeline(text))
-            return result.phonemes
+                def en_callable(text: str) -> str:
+                    result = next(self.en_pipeline(text))
+                    return result.phonemes
 
-        self.pipeline = KPipeline(
-            lang_code="z",
-            repo_id=REPO_ID,
-            model=self.model,
-            en_callable=en_callable,
-        )
-        self.loaded = True
+                self.pipeline = KPipeline(
+                    lang_code="z",
+                    repo_id=REPO_ID,
+                    model=self.model,
+                    en_callable=en_callable,
+                )
+                self.loaded = True
+                print("[Project5] Kokoro model loaded successfully.", flush=True)
+            except Exception as exc:
+                self.load_error = f"{type(exc).__name__}: {exc}"
+                print(f"[Project5] Kokoro model load failed: {self.load_error}", flush=True)
+                raise
+            finally:
+                self.loading = False
+
+    def start_background_load(self) -> None:
+        if self.loaded or self.loading:
+            return
+        thread = threading.Thread(target=self._background_load, name="kokoro-preload", daemon=True)
+        thread.start()
+
+    def _background_load(self) -> None:
+        try:
+            self.load()
+        except Exception:
+            # Error is already saved in load_error and printed to app.log.
+            pass
 
     @staticmethod
     def _split_text(text: str, max_chars: int = 180) -> Iterable[str]:
@@ -144,3 +176,6 @@ class KokoroEngine:
 
 
 engine = KokoroEngine()
+# Start downloading/loading immediately after the service process imports this module.
+# The web server can still become healthy quickly because this runs in the background.
+engine.start_background_load()
