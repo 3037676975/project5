@@ -88,46 +88,59 @@ manifest = load_manifest()
 rebuild = os.getenv("PREVIEW_REBUILD", "0") == "1"
 limit = max(0, int(os.getenv("PREVIEW_MAX_PER_ENGINE", "0") or "0"))
 
+engine_items: dict[str, list[dict]] = {}
 for engine in ("kokoro", "edge"):
-    engine_dir = PREVIEW_ROOT / engine
-    engine_dir.mkdir(parents=True, exist_ok=True)
     preferred = DEFAULT_PREVIEW_VOICES[engine]
     items = sorted(voice_list(engine), key=lambda item: item["id"] != preferred)
     if limit:
         items = items[:limit]
-    print(f"[Preview] building {engine} previews: {len(items)} voices", flush=True)
-    ready_map = manifest.setdefault(engine, {})
+    engine_items[engine] = items
+    (PREVIEW_ROOT / engine).mkdir(parents=True, exist_ok=True)
+    manifest.setdefault(engine, {})
+    print(f"[Preview] queued {engine}: {len(items)} voices", flush=True)
 
-    for index, item in enumerate(items, start=1):
-        voice = item["id"]
-        ext = audio_extension(engine)
-        target = engine_dir / f"{voice}{ext}"
-        url = f"/static/previews/{engine}/{target.name}"
+# Prepare the default Kokoro and default Edge samples first, so both pages get an
+# immediately useful preview instead of making Edge wait behind all 103 Kokoro voices.
+jobs: list[tuple[str, dict, int, int]] = []
+for engine in ("kokoro", "edge"):
+    items = engine_items[engine]
+    if items:
+        jobs.append((engine, items[0], 1, len(items)))
+for engine in ("kokoro", "edge"):
+    items = engine_items[engine]
+    jobs.extend((engine, item, index, len(items)) for index, item in enumerate(items[1:], start=2))
 
-        if not rebuild and valid_file(target, engine):
-            ready_map[voice] = url
-            save_manifest(manifest)
-            print(f"[Preview] {engine} {index}/{len(items)} cached {voice}", flush=True)
-            continue
+for engine, item, index, total in jobs:
+    ready_map = manifest[engine]
+    voice = item["id"]
+    ext = audio_extension(engine)
+    target = PREVIEW_ROOT / engine / f"{voice}{ext}"
+    url = f"/static/previews/{engine}/{target.name}"
 
-        try:
-            target.unlink(missing_ok=True)
-            started = time.perf_counter()
-            duration = generate(engine, PREVIEW_TEXT, voice, 1.0, target)
-            if not valid_file(target, engine):
-                raise RuntimeError("preview output is missing or empty")
-            ready_map[voice] = url
-            save_manifest(manifest)
-            print(
-                f"[Preview] {engine} {index}/{len(items)} OK {voice} "
-                f"duration={duration:.2f}s elapsed={time.perf_counter()-started:.2f}s",
-                flush=True,
-            )
-        except Exception as exc:
-            target.unlink(missing_ok=True)
-            ready_map.pop(voice, None)
-            save_manifest(manifest)
-            print(f"[Preview][WARN] {engine} {voice}: {type(exc).__name__}: {exc}", flush=True)
+    if not rebuild and valid_file(target, engine):
+        ready_map[voice] = url
+        save_manifest(manifest)
+        print(f"[Preview] {engine} {index}/{total} cached {voice}", flush=True)
+        continue
+
+    try:
+        target.unlink(missing_ok=True)
+        started = time.perf_counter()
+        duration = generate(engine, PREVIEW_TEXT, voice, 1.0, target)
+        if not valid_file(target, engine):
+            raise RuntimeError("preview output is missing or empty")
+        ready_map[voice] = url
+        save_manifest(manifest)
+        print(
+            f"[Preview] {engine} {index}/{total} OK {voice} "
+            f"duration={duration:.2f}s elapsed={time.perf_counter()-started:.2f}s",
+            flush=True,
+        )
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        ready_map.pop(voice, None)
+        save_manifest(manifest)
+        print(f"[Preview][WARN] {engine} {voice}: {type(exc).__name__}: {exc}", flush=True)
 
 save_manifest(manifest)
 print(
