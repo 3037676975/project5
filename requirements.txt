@@ -1,7 +1,7 @@
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 python-dotenv>=1.0,<2.0
-kokoro>=0.8.2
-misaki[zh]>=0.8.2
-soundfile>=0.12.1
-numpy>=1.26
+kokoro-onnx==0.6.1
+misaki-fork[zh]>=0.9.4
+soundfile>=0.13.0
+numpy>=2.0.2
