@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project5 API 中文入门</title>
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--line:#e5eaf1;--text:#172033;--muted:#6b7280;--blue:#2563eb;--green:#15803d;--code:#0f172a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75}.wrap{max-width:980px;margin:0 auto;padding:36px 18px 80px}.hero,.section{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:0 12px 34px rgba(18,32,68,.06)}.hero{padding:30px}.section{padding:24px;margin-top:18px}h1{margin:0 0 10px;font-size:30px}h2{font-size:21px;margin:0 0 14px}h3{font-size:16px;margin:22px 0 8px}.muted{color:var(--muted)}.flow{display:grid;gap:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:16px;margin:14px 0}.code{background:var(--code);color:#dbeafe;border-radius:13px;padding:16px;overflow:auto;white-space:pre-wrap;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted)}code{background:#eef2f7;border-radius:6px;padding:2px 6px}.tip{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:12px;padding:13px 15px}.warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:13px 15px}.back{display:inline-flex;margin-bottom:16px;color:var(--blue);text-decoration:none;font-weight:700}@media(max-width:700px){h1{font-size:24px}.hero,.section{padding:18px}.wrap{padding:20px 12px 50px}}
+</style>
+</head>
+<body><main class="wrap">
+<a class="back" href="/">← 返回 Project5 控制台</a>
+<section class="hero"><div class="muted">Project5 · 学习版文档</div><h1>API 中文入门：从“什么是 API”到真正调用 TTS</h1><p class="muted">适合第一次接触 API。看完以后，你应该能理解 API Key、POST、JSON、task_id、轮询和 audio_url 分别在做什么。</p></section>
+<section class="section"><h2>1. API 是什么？</h2><p>API 可以理解为“程序之间办事的窗口”。你的 AI 视频程序不需要知道 Kokoro 模型怎么加载，只需要把文字交给 Project5，然后拿回生成结果。</p><div class="flow">你的 AI 视频项目<br>↓ 提交文字<br><b>Project5 TTS API</b><br>↓ 返回任务编号 task_id<br>你的项目查询任务进度<br>↓<br>拿到 audio_url<br>↓<br>继续合成视频</div><div class="tip">一句话：Project5 把“语音生成”封装成一个独立服务，其他项目只负责调用它。</div></section>
+<section class="section"><h2>2. 一次 API 请求由哪些部分组成？</h2><div class="code">POST /v1/audio/speech
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "input": "今天学习 ChatGPT and LangChain，然后继续中文。",
+  "engine": "kokoro",
+  "voice": "zf_001",
+  "speed": 1.0
+}</div><table><tr><th>部分</th><th>意思</th></tr><tr><td><code>POST</code></td><td>提交数据，让服务器执行一件事</td></tr><tr><td><code>/v1/audio/speech</code></td><td>语音生成这个功能的地址</td></tr><tr><td><code>Authorization</code></td><td>身份认证</td></tr><tr><td><code>Bearer API_KEY</code></td><td>你的调用通行证</td></tr><tr><td><code>JSON</code></td><td>你交给服务器的参数表单</td></tr></table></section>
+<section class="section"><h2>3. 为什么先返回 task_id，而不是直接返回音频？</h2><p>TTS 可能需要几秒甚至更久，所以 Project5 使用异步任务。</p><div class="flow"><b>POST /v1/audio/speech</b><br>↓<br>HTTP 202 + task_id<br>↓<br><b>GET /v1/tasks/{id}</b><br>↓<br>queued → processing → completed<br>↓<br>读取 audio_url</div><p><code>202 Accepted</code> 的意思是“任务已经接收”，不是“已经生成完成”。</p></section>
+<section class="section"><h2>4. 获取音色</h2><h3>Kokoro</h3><div class="code">GET /v1/voices?engine=kokoro</div><h3>Edge</h3><div class="code">GET /v1/voices?engine=edge</div><p>后台音色表里的 <b>API ID</b>，例如 <code>zf_001</code>，就是请求里的 <code>voice</code>。</p></section>
+<section class="section"><h2>5. Kokoro 调用</h2><div class="code">POST /v1/audio/speech
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "input": "你好，today we test ChatGPT，然后继续中文。",
+  "engine": "kokoro",
+  "voice": "zf_001",
+  "speed": 1.0
+}</div><p>Kokoro 在服务器本地 CPU 推理，最终生成 WAV。</p></section>
+<section class="section"><h2>6. Edge 调用</h2><div class="code">POST /v1/audio/speech
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "input": "你好，这是 Edge TTS 测试。",
+  "engine": "edge",
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "speed": 1.0
+}</div><p>Edge 需要服务器联网，最终生成 MP3。</p></section>
+<section class="section"><h2>7. 查询任务</h2><div class="code">GET /v1/tasks/TASK_ID
+Authorization: Bearer YOUR_API_KEY</div><p>完成以后会看到类似：</p><div class="code">{
+  "id": "tts_...",
+  "status": "completed",
+  "engine": "kokoro",
+  "voice": "zf_001",
+  "audio_url": "http://YOUR_HOST/audio/tts_....wav"
+}</div></section>
+<section class="section"><h2>8. Python 完整示例</h2><div class="code">import time
+import requests
+
+BASE_URL = "http://YOUR_HOST"
+API_KEY = "YOUR_API_KEY"
+headers = {"Authorization": f"Bearer {API_KEY}"}
+
+r = requests.post(
+    f"{BASE_URL}/v1/audio/speech",
+    headers=headers,
+    json={
+        "input": "今天学习 ChatGPT and LangChain，然后继续中文。",
+        "engine": "kokoro",
+        "voice": "zf_001",
+        "speed": 1.0,
+    },
+    timeout=30,
+)
+r.raise_for_status()
+task_id = r.json()["id"]
+
+while True:
+    task = requests.get(
+        f"{BASE_URL}/v1/tasks/{task_id}",
+        headers=headers,
+        timeout=30,
+    ).json()
+    if task["status"] == "completed":
+        print(task["audio_url"])
+        break
+    if task["status"] == "failed":
+        raise RuntimeError(task.get("error"))
+    time.sleep(1)</div></section>
+<section class="section"><h2>9. 固定试听与正式音频</h2><table><tr><th>类型</th><th>用途</th><th>保存策略</th></tr><tr><td>固定试听</td><td>比较音色、写备注</td><td>永久保存，不参与 24h 清理</td></tr><tr><td>正式生成音频</td><td>视频、播客真正使用</td><td>手动清理，或开启 24h 自动清理</td></tr></table></section>
+<section class="section"><h2>10. 常见状态码</h2><table><tr><th>状态</th><th>含义</th></tr><tr><td>200</td><td>请求成功</td></tr><tr><td>202</td><td>任务已接收，正在异步处理</td></tr><tr><td>400</td><td>参数错误，例如 voice 不存在</td></tr><tr><td>401</td><td>API Key 不正确</td></tr><tr><td>404</td><td>任务或音频不存在</td></tr><tr><td>500</td><td>服务器内部错误</td></tr></table><div class="warn">不要把真正的 API Key 写到 GitHub 公共仓库，也不要直接写在公开网页 JavaScript 里。正式项目最好由你自己的后端保存 Key。</div></section>
+<section class="section"><h2>11. 最后记住这 7 个词</h2><div class="flow">API Key = 通行证<br>Endpoint = 办事窗口<br>POST = 提交任务<br>JSON = 参数表单<br>202 + task_id = 取件号<br>GET /v1/tasks/{id} = 查进度<br>audio_url = 最终结果</div></section>
+</main></body></html>
