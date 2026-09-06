@@ -1,0 +1,116 @@
+name: Project5 Manual Preview Selfcheck
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ADMIN_KEY: ci-project5-preview-admin
+      KOKORO_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install base dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt httpx
+
+      - name: Manual preview API and persistence flow
+        run: |
+          rm -rf app/static/previews
+          rm -f data/project5.db data/project5.db-*
+          python - <<'PY'
+          import time
+          from pathlib import Path
+          from fastapi.testclient import TestClient
+
+          from app.entry import app
+          import app.preview_admin as previews
+
+          def fake_generate(engine, text, voice, speed, output_path):
+              output_path.parent.mkdir(parents=True, exist_ok=True)
+              # Preview manager validates size, not codec internals. This isolates
+              # the manual workflow from the expensive real model selfcheck.
+              payload = (f'{engine}|{voice}|{speed}|{text}'.encode('utf-8') + b'0' * 2048)
+              output_path.write_bytes(payload)
+              return 1.234
+
+          previews.generate_dual_tts = fake_generate
+          headers = {'X-Admin-Key': 'ci-project5-preview-admin'}
+
+          def wait_job(client, job_id):
+              deadline = time.time() + 15
+              while time.time() < deadline:
+                  r = client.get(f'/admin/previews/jobs/{job_id}', headers=headers)
+                  assert r.status_code == 200, r.text
+                  job = r.json()
+                  if job['status'] == 'completed':
+                      return job
+                  if job['status'] in {'failed', 'cancelled'}:
+                      raise RuntimeError(job)
+                  time.sleep(0.05)
+              raise TimeoutError(job_id)
+
+          with TestClient(app) as client:
+              initial = client.get('/admin/previews', headers=headers)
+              assert initial.status_code == 200, initial.text
+              initial = initial.json()
+              assert initial['mode'] == 'manual-persistent'
+              assert initial['counts']['kokoro']['ready'] == 0
+
+              text1 = '你好，today we test ChatGPT，然后继续聊天。'
+              saved = client.put('/admin/previews/text', headers=headers, json={'text': text1})
+              assert saved.status_code == 200, saved.text
+              assert saved.json()['text'] == text1
+
+              submit = client.post('/admin/previews/generate', headers=headers, json={
+                  'engine': 'kokoro', 'voice': 'zf_001', 'speed': 1.0
+              })
+              assert submit.status_code == 202, submit.text
+              wait_job(client, submit.json()['id'])
+
+              ready = client.get('/admin/previews', headers=headers).json()
+              item = ready['kokoro']['zf_001']
+              assert item['stale'] is False
+              assert item['url'].endswith('/kokoro/zf_001.wav')
+              assert Path('app/static/previews/kokoro/zf_001.wav').stat().st_size > 44
+              assert Path('app/static/previews/manifest.json').exists()
+
+              text2 = '新的试听文案，now switch to English，然后回到中文。'
+              client.put('/admin/previews/text', headers=headers, json={'text': text2}).raise_for_status()
+              stale = client.get('/admin/previews', headers=headers).json()
+              assert stale['kokoro']['zf_001']['stale'] is True
+
+              submit2 = client.post('/admin/previews/generate', headers=headers, json={
+                  'engine': 'kokoro', 'voice': 'zf_001', 'speed': 1.0
+              })
+              wait_job(client, submit2.json()['id'])
+              refreshed = client.get('/admin/previews', headers=headers).json()
+              assert refreshed['kokoro']['zf_001']['stale'] is False
+
+              batch = client.post('/admin/previews/generate-batch', headers=headers, json={
+                  'engine': 'edge', 'priority_voice': 'zh-CN-XiaoxiaoNeural', 'speed': 1.0
+              })
+              assert batch.status_code == 202, batch.text
+              batch_job = wait_job(client, batch.json()['id'])
+              assert batch_job['completed'] == batch_job['total']
+              edge = client.get('/admin/previews', headers=headers).json()
+              assert edge['counts']['edge']['current'] == edge['counts']['edge']['total']
+
+          print('manual-preview-persistent-flow-ok')
+          PY
+
+      - name: No automatic preview builder remains
+        run: |
+          test ! -e scripts/build-voice-previews.py
+          ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
+          grep -q 'manual-persistent-v1' app/entry.py
