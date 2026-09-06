@@ -28,6 +28,11 @@ from app.dual_tts import (
 from app.main import LOG_DIR, STATIC_DIR, app
 from app.tts import CONFIG_PATH, MODEL_PATH, VOICES_PATH, engine
 
+# Registers the administrator-controlled fixed-preview API. Importing this module
+# does not start any synthesis job; previews are generated only after an explicit
+# action from the console.
+import app.preview_admin  # noqa: F401,E402
+
 
 # ---------------------------------------------------------------------------
 # Schema migration: keep every old task valid and add the selected TTS engine.
@@ -208,9 +213,13 @@ async def stop_second_tts_worker() -> None:
 
 @app.get("/")
 def project5_console() -> HTMLResponse:
-    # Important: serve the real dual-engine HTML directly. Do not depend on a
-    # post-load overlay to turn the old Kokoro-only console into an Edge console.
+    # Serve the real dual-engine page and inject the manual preview manager. The
+    # preview JS is separate so deployments can evolve the preview workflow without
+    # returning to fragile DOM-overlay logic for the main console.
     html = (STATIC_DIR / "console-v2.html").read_text(encoding="utf-8")
+    preview_script = '<script src="/static/preview-admin.js?v=manual-preview-v1"></script>'
+    if preview_script not in html:
+        html = html.replace("</body>", preview_script + "</body>")
     return HTMLResponse(
         html,
         headers={
@@ -218,6 +227,7 @@ def project5_console() -> HTMLResponse:
             "Pragma": "no-cache",
             "Expires": "0",
             "X-Project5-Console": "dual-engine-v2",
+            "X-Project5-Preview": "manual-persistent-v1",
         },
     )
 
@@ -234,6 +244,7 @@ def health() -> dict:
         "model_loaded": engine.loaded,
         "device": engine.device,
         "console": "dual-engine-v2",
+        "preview_mode": "manual-persistent-v1",
         "engines": {
             KOKORO_ENGINE: {
                 "name": "Kokoro-82M-v1.1-zh",
@@ -370,6 +381,7 @@ def project5_runtime() -> dict:
         "last_metrics": engine.last_metrics,
         "selfcheck": _last_selfcheck(),
         "console": "dual-engine-v2",
+        "preview_mode": "manual-persistent-v1",
         "engines": {
             "kokoro": {
                 "state": state,
@@ -403,9 +415,11 @@ async def project5_response_headers(request, call_next):
         response.headers["Content-Disposition"] = f'inline; filename="{filename}"'
         response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
         response.headers["X-Content-Type-Options"] = "nosniff"
+    elif path.startswith("/static/previews/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     elif path == "/v1/voices":
         response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
-    elif path in {"/", "/runtime", "/health"}:
+    elif path in {"/", "/runtime", "/health"} or path.startswith("/admin/previews"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
 
     return response
