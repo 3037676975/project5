@@ -69,8 +69,12 @@ upstream_port = os.environ["PROJECT5_UPSTREAM_PORT"]
 txn_dir = Path(os.environ["PROJECT5_NGINX_TXN_DIR"]).resolve()
 manifest = Path(os.environ["PROJECT5_NGINX_MANIFEST"]).resolve()
 
-proxy_block = f'''    # PROJECT5-AUTO-PROXY-START
-    location / {{
+# Keep the Project5 markers INSIDE the existing root location. Earlier revisions
+# could find a marker inside an already-valid `location / { ... }` block and then
+# replace only the marker region with a SECOND full `location /` block. That is the
+# exact shape that produces: nginx: [emerg] duplicate location "/".
+proxy_block = f'''    location / {{
+        # PROJECT5-AUTO-PROXY-START
         proxy_pass http://127.0.0.1:{upstream_port};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -81,17 +85,14 @@ proxy_block = f'''    # PROJECT5-AUTO-PROXY-START
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_buffering off;
+        # PROJECT5-AUTO-PROXY-END
     }}
-    # PROJECT5-AUTO-PROXY-END
 '''
 
 server_re = re.compile(r"(?m)^[ \t]*server\s*\{")
 root_location_re = re.compile(r"(?m)^[ \t]*location[ \t]+(?:\^~[ \t]+)?/[ \t]*\{")
 include_re = re.compile(r"(?m)^[ \t]*include[ \t]+([^;\n]+);")
 listen_re = re.compile(rf"(?m)^[ \t]*listen[ \t]+(?:[^;\n]*:)?{re.escape(public_port)}(?:[ \t;]|$)")
-marker_re = re.compile(
-    r"(?ms)^[ \t]*# PROJECT5-AUTO-PROXY-START\s*\n.*?^[ \t]*# PROJECT5-AUTO-PROXY-END\s*\n?"
-)
 
 
 def block_end(text: str, open_index: int) -> int:
@@ -199,22 +200,16 @@ def write_with_backup(path: Path, new_text: str) -> None:
     with manifest.open("a", encoding="utf-8") as fh:
         fh.write(f"{path}\t{backup}\n")
     path.write_text(new_text, encoding="utf-8")
-    print(f"[Project5][PROXY] 修改真正的 location / 来源：{path}")
+    print(f"[Project5][PROXY] 原位改写已有 location /：{path}")
 
 
 main_text = main.read_text(encoding="utf-8")
 server_start, server_end = find_target_server(main_text)
 server_text = main_text[server_start:server_end]
 
-# Project5 marker already exists directly in this server: update it idempotently.
-marker = marker_re.search(server_text)
-if marker:
-    a = server_start + marker.start()
-    b = server_start + marker.end()
-    write_with_backup(main, main_text[:a] + proxy_block + main_text[b:])
-    raise SystemExit(0)
-
-# Normal static BaoTa site: replace its direct location / block.
+# IMPORTANT: always replace an EXISTING `location /` block as a whole. Do not
+# special-case Project5 markers before locating the root block; markers may live
+# inside that root block on existing BaoTa sites.
 direct_roots = root_blocks(server_text)
 if len(direct_roots) == 1:
     a, b = direct_roots[0]
@@ -224,8 +219,8 @@ if len(direct_roots) > 1:
     raise SystemExit(f"ambiguous direct location / count: {len(direct_roots)}")
 
 # BaoTa reverse-proxy sites often put location / in an included proxy/*.conf file.
-# Follow includes from THIS server block and modify the existing root location there,
-# instead of inserting a second location / into the top-level vhost.
+# Follow includes from THIS server block and modify that existing root location in
+# place instead of inserting a second root location into the top-level vhost.
 included = recursive_includes(direct_includes(server_text, main))
 roots = []
 for path in included:
