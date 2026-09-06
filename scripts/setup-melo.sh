@@ -47,23 +47,28 @@ fi
 "$VENV/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
 "$VENV/bin/python" -m pip install -q --upgrade pip setuptools wheel
 
-REQ_HASH="$(sha256sum "$RUNTIME_DIR/requirements.txt" | awk '{print $1}')-project5-v2"
+REQ_HASH="$(sha256sum "$RUNTIME_DIR/requirements.txt" | awk '{print $1}')-project5-v3-torch231cpu"
 OLD_HASH="$(cat "$PROJECT_DIR/.melo-requirements.sha256" 2>/dev/null || true)"
 if [ "$REQ_HASH" != "$OLD_HASH" ] || ! "$VENV/bin/python" - <<PY >/dev/null 2>&1
 import sys
 sys.path.insert(0, r'$RUNTIME_DIR')
 import torch, torchaudio
 from melo.api import TTS
+assert '+cpu' in torch.__version__ or not torch.cuda.is_available()
 print(torch.__version__)
 PY
 then
-  echo '[MeloTTS] 安装 CPU 版 PyTorch 与 MeloTTS 中文运行依赖（首次会比较久）'
-  "$VENV/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+  echo '[MeloTTS] 安装固定 CPU 版 PyTorch，避免无 GPU 服务器误装 CUDA 依赖'
+  "$VENV/bin/python" -m pip install \
+    'torch==2.3.1+cpu' 'torchaudio==2.3.1+cpu' \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+
   FILTERED="$PROJECT_DIR/.runtime/melo-requirements-project5.txt"
   grep -vE '^(torch|torchaudio|gradio|tensorboard)([<=> ].*)?$' "$RUNTIME_DIR/requirements.txt" > "$FILTERED"
   {
     echo 'numpy==1.23.5'
     echo 'scipy==1.10.1'
+    echo 'huggingface-hub<1.0'
   } >> "$FILTERED"
   "$VENV/bin/python" -m pip install -r "$FILTERED"
   echo "$REQ_HASH" > "$PROJECT_DIR/.melo-requirements.sha256"
@@ -75,9 +80,9 @@ export TRANSFORMERS_CACHE="$PROJECT_DIR/models/melo-cache/transformers"
 export TOKENIZERS_PARALLELISM=false
 
 "$VENV/bin/python" - <<'PY'
-import sys
+import torch
 from melo.api import TTS
-print('[MeloTTS] Python API import OK')
+print('[MeloTTS] Python API import OK, torch=', torch.__version__)
 PY
 
 bash "$PROJECT_DIR/scripts/stop-melo.sh" || true
