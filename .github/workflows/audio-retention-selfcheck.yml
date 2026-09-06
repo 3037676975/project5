@@ -1,0 +1,82 @@
+name: Project5 Audio Retention Selfcheck
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  retention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ADMIN_KEY: ci-project5-retention-admin
+      KOKORO_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt httpx
+      - name: Retention API preserves previews and task history
+        run: |
+          rm -f data/project5.db data/project5.db-*
+          rm -rf data/audio app/static/previews
+          mkdir -p data/audio app/static/previews/kokoro
+          python - <<'PY'
+          from datetime import datetime, timedelta
+          from pathlib import Path
+          from fastapi.testclient import TestClient
+
+          from app.entry import app
+          import app.main as core
+
+          old_time = (datetime.now() - timedelta(hours=30)).isoformat(timespec='seconds')
+          fresh_time = datetime.now().isoformat(timespec='seconds')
+          old_file = Path('data/audio/old.wav')
+          fresh_file = Path('data/audio/fresh.wav')
+          preview_file = Path('app/static/previews/kokoro/zf_001.wav')
+          old_file.write_bytes(b'R' * 2048)
+          fresh_file.write_bytes(b'F' * 2048)
+          preview_file.write_bytes(b'P' * 2048)
+
+          with core.db() as conn:
+              conn.execute("""INSERT INTO tts_tasks
+                  (id,api_key_id,source_name,source_ip,input_text,engine,voice,speed,chars,status,audio_filename,duration,file_size,elapsed_ms,created_at,completed_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  ('old',None,'test','127.0.0.1','old','kokoro','zf_001',1.0,3,'completed','old.wav',1.0,2048,10,old_time,old_time))
+              conn.execute("""INSERT INTO tts_tasks
+                  (id,api_key_id,source_name,source_ip,input_text,engine,voice,speed,chars,status,audio_filename,duration,file_size,elapsed_ms,created_at,completed_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  ('fresh',None,'test','127.0.0.1','fresh','kokoro','zf_001',1.0,5,'completed','fresh.wav',1.0,2048,10,fresh_time,fresh_time))
+
+          headers = {'X-Admin-Key': 'ci-project5-retention-admin'}
+          with TestClient(app) as client:
+              initial = client.get('/admin/audio-retention', headers=headers)
+              assert initial.status_code == 200, initial.text
+              assert initial.json()['enabled'] is False
+              enabled = client.put('/admin/audio-retention', headers=headers, json={'enabled': True})
+              assert enabled.status_code == 200, enabled.text
+              data = enabled.json()
+              assert data['enabled'] is True and data['hours'] == 24
+              assert not old_file.exists()
+              assert fresh_file.exists()
+              assert preview_file.exists(), 'fixed previews must never be retention-cleaned'
+              with core.db() as conn:
+                  old = conn.execute('SELECT audio_filename,status FROM tts_tasks WHERE id=?', ('old',)).fetchone()
+                  fresh = conn.execute('SELECT audio_filename,status FROM tts_tasks WHERE id=?', ('fresh',)).fetchone()
+              assert old['status'] == 'completed' and old['audio_filename'] is None
+              assert fresh['status'] == 'completed' and fresh['audio_filename'] == 'fresh.wav'
+              manual = client.post('/admin/audio-retention/cleanup', headers=headers)
+              assert manual.status_code == 200
+              assert preview_file.exists()
+              version = client.get('/deploy-version').json()
+              assert version['ui'] == 'voice-library-retention-v1'
+              assert 'optional-24h-audio-retention' in version['features']
+              client.put('/admin/audio-retention', headers=headers, json={'enabled': False}).raise_for_status()
+          print('audio-retention-real-flow-ok')
+          PY
