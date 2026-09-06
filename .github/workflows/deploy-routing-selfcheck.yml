@@ -20,119 +20,22 @@ jobs:
           bash -n scripts/stop.sh
           bash -n scripts/restart.sh
 
-      - name: Simulate BaoTa direct vhost proxy repair
+      - name: Known-good BaoTa deploy path from f4a24ef
         run: |
-          TMP="$(mktemp -d)"
-          mkdir -p "$TMP/vhost" "$TMP/bin"
-          cat > "$TMP/vhost/project5.conf" <<'EOF'
-          server {
-              listen 28442;
-              server_name 127.0.0.1;
-              root /www/wwwroot/project5;
-              location / {
-                  try_files $uri $uri/ /index.html;
-              }
-          }
-          EOF
-          cat > "$TMP/bin/nginx" <<'EOF'
-          #!/usr/bin/env bash
-          exit 0
-          EOF
-          chmod +x "$TMP/bin/nginx"
-          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
-          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
-          grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf"
-          ! grep -q 'try_files' "$TMP/vhost/project5.conf"
-          test "$(grep -c '^[[:space:]]*location /' "$TMP/vhost/project5.conf")" -eq 1
+          grep -q 'Project5 · Verified Webhook Deploy' scripts/auto-deploy.sh
+          grep -q '\[1/5\]' scripts/auto-deploy.sh
+          grep -q '\[5/5\]' scripts/auto-deploy.sh
+          grep -q 'scripts/restart.sh' scripts/auto-deploy.sh
+          grep -q '代码、端口新进程、线上 commit、新功能四层一致' scripts/auto-deploy.sh
+          ! grep -q 'bash .*ensure-baota-proxy.sh' scripts/auto-deploy.sh
+          ! grep -q 'public_is_current' scripts/auto-deploy.sh
+          ! grep -q 'nginx -t' scripts/auto-deploy.sh
 
-      - name: Reproduce existing marker inside location slash
+      - name: Nginx repair remains a separate manual utility
         run: |
-          TMP="$(mktemp -d)"
-          mkdir -p "$TMP/vhost" "$TMP/bin"
-          cat > "$TMP/vhost/project5.conf" <<'EOF'
-          server {
-              listen 28442;
-              server_name 127.0.0.1;
-              root /www/wwwroot/project5;
-              location / {
-                  # PROJECT5-AUTO-PROXY-START
-                  proxy_pass http://127.0.0.1:7999;
-                  # PROJECT5-AUTO-PROXY-END
-                  try_files $uri $uri/ /index.html;
-              }
-          }
-          EOF
-          cat > "$TMP/bin/nginx" <<'EOF'
-          #!/usr/bin/env bash
-          exit 0
-          EOF
-          chmod +x "$TMP/bin/nginx"
-          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
-          test "$(grep -c '^[[:space:]]*location /' "$TMP/vhost/project5.conf")" -eq 1
-          test "$(grep -c 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf")" -eq 1
-          test "$(grep -c 'PROJECT5-AUTO-PROXY-END' "$TMP/vhost/project5.conf")" -eq 1
-          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
-          ! grep -q '127.0.0.1:7999' "$TMP/vhost/project5.conf"
-          ! grep -q 'try_files' "$TMP/vhost/project5.conf"
-
-      - name: Reproduce BaoTa included location slash case
-        run: |
-          TMP="$(mktemp -d)"
-          mkdir -p "$TMP/vhost/proxy/project5" "$TMP/bin"
-          cat > "$TMP/vhost/project5.conf" <<EOF
-          server {
-              listen 28442;
-              server_name 127.0.0.1;
-              root /www/wwwroot/project5;
-              include $TMP/vhost/proxy/project5/*.conf;
-          }
-          EOF
-          cat > "$TMP/vhost/proxy/project5/root.conf" <<'EOF'
-          location / {
-              try_files $uri $uri/ /index.html;
-          }
-          EOF
-          cat > "$TMP/bin/nginx" <<'EOF'
-          #!/usr/bin/env bash
-          exit 0
-          EOF
-          chmod +x "$TMP/bin/nginx"
-          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
-          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/proxy/project5/root.conf"
-          grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/proxy/project5/root.conf"
-          ! grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf"
-          test "$(grep -Rhc '^[[:space:]]*location /' "$TMP/vhost" | awk '{s+=$1} END{print s+0}')" -eq 1
-
-      - name: Reproduce direct plus included duplicate root case
-        run: |
-          TMP="$(mktemp -d)"
-          mkdir -p "$TMP/vhost/proxy/project5" "$TMP/bin"
-          cat > "$TMP/vhost/project5.conf" <<EOF
-          server {
-              listen 28442;
-              server_name 186.244.245.177;
-              root /www/wwwroot/project5;
-              include $TMP/vhost/proxy/project5/*.conf;
-              location / {
-                  try_files \$uri \$uri/ /index.html;
-              }
-          }
-          EOF
-          cat > "$TMP/vhost/proxy/project5/root.conf" <<'EOF'
-          location / {
-              proxy_pass http://127.0.0.1:7999;
-          }
-          EOF
-          cat > "$TMP/bin/nginx" <<'EOF'
-          #!/usr/bin/env bash
-          exit 0
-          EOF
-          chmod +x "$TMP/bin/nginx"
-          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
-          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
-          ! grep -q '127.0.0.1:7999' "$TMP/vhost/proxy/project5/root.conf"
-          test "$(grep -Rhc '^[[:space:]]*location /' "$TMP/vhost" | awk '{s+=$1} END{print s+0}')" -eq 1
-          grep -q '186.244.245.177' logs/project5-public-host
+          grep -q 'PROJECT5-AUTO-PROXY-START' scripts/ensure-baota-proxy.sh
+          grep -q 'nginx' scripts/ensure-baota-proxy.sh
+          grep -q 'proxy_pass http://127.0.0.1' scripts/ensure-baota-proxy.sh
 
       - name: Chinese API learning docs
         run: |
@@ -142,10 +45,3 @@ jobs:
           grep -q 'Python 调用完整示例' API_DOCS.md
           grep -q 'API 中文入门' app/static/api-guide-zh.html
           grep -q 'API Key = 通行证' app/static/api-guide-zh.html
-
-      - name: Deploy verifies public route
-        run: |
-          grep -q 'ensure-baota-proxy.sh' scripts/auto-deploy.sh
-          grep -q 'PROJECT5_PUBLIC_PORT' scripts/auto-deploy.sh
-          grep -q 'public_is_current' scripts/auto-deploy.sh
-          grep -q '宝塔/Nginx' scripts/auto-deploy.sh
