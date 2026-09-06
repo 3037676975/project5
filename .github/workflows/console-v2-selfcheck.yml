@@ -1,4 +1,4 @@
-name: Project5 Dual Console Selfcheck
+name: Project5 Tri-Engine Console Selfcheck
 
 on:
   push:
@@ -14,18 +14,20 @@ jobs:
 
       - name: Python syntax
         run: |
-          python -m py_compile app/entry.py app/tts.py app/dual_tts.py
+          python -m py_compile app/entry.py app/tts.py app/dual_tts.py scripts/melo_worker.py
 
-      - name: Explicit dual-engine console structure
+      - name: Explicit tri-engine console structure
         run: |
           grep -q 'Kokoro 本地试听' app/static/console-v2.html
+          grep -q 'MeloTTS 本地试听' app/static/console-v2.html
           grep -q 'Edge 在线试听' app/static/console-v2.html
-          grep -q 'Kokoro · WAV' app/static/console-v2.html
-          grep -q 'Edge · MP3' app/static/console-v2.html
-          grep -q '/v1/voices?engine=kokoro' app/static/console-v2.html
-          grep -q '/v1/voices?engine=edge' app/static/console-v2.html
-          grep -q '"engine":"kokoro"' app/static/console-v2.html
-          grep -q '"engine":"edge"' app/static/console-v2.html
+          grep -q 'Kokoro WAV' app/static/console-v2.html
+          grep -q 'MeloTTS WAV' app/static/console-v2.html
+          grep -q 'Edge MP3' app/static/console-v2.html
+          grep -q 'engine=kokoro' app/static/console-v2.html
+          grep -q 'engine=melo' app/static/console-v2.html
+          grep -q 'engine=edge' app/static/console-v2.html
+          grep -q 'progress-ring' app/static/console-v2.html
           grep -q 'console-v2.html' app/entry.py
           grep -q 'dual-engine-v2' app/entry.py
 
@@ -41,8 +43,9 @@ jobs:
           PY
           node --check /tmp/project5-console-v2.js
 
-      - name: Native mixed-language engine wiring
+      - name: Native mixed-language engines wiring
         run: |
           grep -q 'ZHG2P(version="1.1", en_callable=english_callable)' app/tts.py
-          grep -q 'misaki-espeak-fallback' app/tts.py
-          grep -q 'mixed_zh_en' app/tts.py
+          grep -q 'MELO_ENGINE = "melo"' app/dual_tts.py
+          grep -q 'TTS(language="ZH", device="cpu")' scripts/melo_worker.py
+          grep -q 'ZH_MIX_EN' app/dual_tts.py
