@@ -243,7 +243,7 @@
     if (oldText) oldText.style.display = 'none';
 
     const note = document.querySelector(`#${engine} .engine-note`);
-    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以手动补齐全部音色；固定试听统一为 1.0x，生成后的试听会永久保存在服务器本地。每个音色还可以写你自己的备注。';
+    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以一键生成全部音色；固定试听统一为 1.0x，生成后的试听会永久保存在服务器本地。每个音色都可以写你自己的备注。';
 
     const voiceNote = document.createElement('div');
     voiceNote.className = 'field';
@@ -265,10 +265,10 @@
       <div class="row" style="margin-bottom:12px">
         <button class="btn small secondary" id="${engine}SavePreviewText">保存试听文案</button>
         <button class="btn small" id="${engine}GeneratePreview">生成 / 更新当前音色试听</button>
-        <button class="btn small secondary" id="${engine}GenerateAllPreview">手动补齐全部音色</button>
+        <button class="btn small secondary" id="${engine}GenerateAllPreview">一键生成全部试听</button>
         <span class="muted" id="${engine}PreviewCount">读取中</span>
       </div>
-      <div class="muted" style="margin-bottom:12px">不会再自动后台生成。只有你点击生成时才工作；固定试听统一 1.0x，并永久保存在服务器本地，部署和普通音频清理都不会删除。修改文案后，旧试听仍可播放，但会标记为“旧文案试听”。未保存的编辑内容也不会被定时刷新覆盖。</div>`;
+      <div class="muted" style="margin-bottom:12px">不会再自动后台生成。只有你点击生成时才工作；固定试听统一 1.0x，并永久保存在服务器本地，部署和普通音频清理都不会删除。下面的音色库表格会显示全部音色、试听状态和你的备注。</div>`;
     const player = box.querySelector('.preview-player');
     box.insertBefore(controls, player || null);
 
@@ -288,9 +288,6 @@
 
   ['kokoro', 'edge'].forEach(installPanel);
 
-  // Replace the old automatic-background-preview behavior without rewriting the
-  // whole console. Existing page navigation and voice-change handlers resolve
-  // these function names dynamically, so they now use the manual persistent mode.
   try { loadPreviewManifest = loadManualManifest; } catch (_) {}
   try { refreshPreview = refreshManualPreview; } catch (_) {}
   try { playPreview = playManualPreview; } catch (_) {}
@@ -308,5 +305,15 @@
     Promise.all([loadManualManifest(true), loadVoiceNotes(true)]).then(() => {
       setTimeout(() => ['kokoro', 'edge'].forEach(engine => { decorateVoiceOptions(engine); refreshVoiceNote(engine); }), 300);
     });
+  }
+
+  // New console features live in a separate first-class module so the existing
+  // TTS page remains stable. This loader is itself part of the verified frontend.
+  if (!document.getElementById('project5VoiceLibraryScript')) {
+    const script = document.createElement('script');
+    script.id = 'project5VoiceLibraryScript';
+    script.src = '/static/voice-library.js?v=voice-library-retention-v1';
+    script.async = false;
+    document.body.appendChild(script);
   }
 })();
