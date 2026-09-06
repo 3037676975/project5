@@ -3,89 +3,181 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Project5 API 中文入门</title>
+<title>Project5 API 中文小白教程</title>
 <style>
-:root{--bg:#f5f7fb;--card:#fff;--line:#e5eaf1;--text:#172033;--muted:#6b7280;--blue:#2563eb;--green:#15803d;--code:#0f172a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75}.wrap{max-width:980px;margin:0 auto;padding:36px 18px 80px}.hero,.section{background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:0 12px 34px rgba(18,32,68,.06)}.hero{padding:30px}.section{padding:24px;margin-top:18px}h1{margin:0 0 10px;font-size:30px}h2{font-size:21px;margin:0 0 14px}h3{font-size:16px;margin:22px 0 8px}.muted{color:var(--muted)}.flow{display:grid;gap:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:14px;padding:16px;margin:14px 0}.code{background:var(--code);color:#dbeafe;border-radius:13px;padding:16px;overflow:auto;white-space:pre-wrap;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted)}code{background:#eef2f7;border-radius:6px;padding:2px 6px}.tip{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:12px;padding:13px 15px}.warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:13px 15px}.back{display:inline-flex;margin-bottom:16px;color:var(--blue);text-decoration:none;font-weight:700}@media(max-width:700px){h1{font-size:24px}.hero,.section{padding:18px}.wrap{padding:20px 12px 50px}}
+:root{--bg:#f5f7fb;--card:#fff;--line:#e5eaf1;--text:#172033;--muted:#6b7280;--blue:#2563eb;--green:#15803d;--orange:#c2410c;--code:#0f172a}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#f5f8ff,#f8fafc 35%,#f5f7fb);color:var(--text);font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75}.wrap{max-width:1040px;margin:0 auto;padding:34px 18px 80px}.hero,.section{background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 12px 34px rgba(18,32,68,.055)}.hero{padding:30px;background:linear-gradient(135deg,#eff6ff,#fff)}.section{padding:24px;margin-top:18px}h1{margin:5px 0 10px;font-size:31px;line-height:1.35}h2{font-size:21px;margin:0 0 14px}h3{font-size:16px;margin:22px 0 8px}.muted{color:var(--muted)}.kicker{font-size:12px;font-weight:800;color:var(--blue);letter-spacing:.08em}.recommended{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:18px 0}.recommended>div{padding:13px;border-radius:13px;border:1px solid #bfdbfe;background:#fff}.recommended span{display:block;font-size:11px;color:var(--muted)}.recommended b{display:block;margin-top:4px;font-size:13px;word-break:break-word}.flow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8fbff;border:1px solid #dbeafe;border-radius:14px;padding:14px;margin:14px 0}.flow span{padding:7px 9px;border-radius:9px;background:#fff;border:1px solid #dbeafe;font-size:12px}.flow .arrow{background:transparent;border:0;color:#94a3b8;padding:0}.code{background:var(--code);color:#dbeafe;border-radius:13px;padding:16px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}.terms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.term{padding:13px;border-radius:12px;background:#f8fafc;border:1px solid var(--line)}.term b{display:block}.term span{display:block;margin-top:4px;color:var(--muted);font-size:12px}.tip,.warn{border-radius:13px;padding:14px 16px;margin:14px 0}.tip{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}.warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px}code{background:#eef2f7;border-radius:6px;padding:2px 6px}.back{display:inline-flex;margin-bottom:16px;color:var(--blue);text-decoration:none;font-weight:700}.btn{border:0;border-radius:10px;padding:9px 13px;background:var(--blue);color:#fff;cursor:pointer;font-weight:700}.btn.secondary{background:#eef2f7;color:#334155}.code-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:12px 0 7px}.ai-box{background:#f7f7ff;border:1px solid #c7d2fe;border-radius:16px;padding:18px}.steps{display:grid;gap:11px}.step{display:grid;grid-template-columns:38px 1fr;gap:11px}.num{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--blue);color:#fff;font-weight:800}.step-body{padding:13px 15px;border:1px solid var(--line);border-radius:13px;background:#fff}.step-body b{display:block;margin-bottom:4px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}@media(max-width:760px){h1{font-size:25px}.hero,.section{padding:18px}.wrap{padding:20px 12px 50px}.recommended{grid-template-columns:1fr 1fr}.terms{grid-template-columns:1fr 1fr}}@media(max-width:520px){.recommended,.terms{grid-template-columns:1fr}.step{grid-template-columns:1fr}.code-head{align-items:flex-start;flex-direction:column}.code{font-size:11px}}
 </style>
 </head>
-<body><main class="wrap">
+<body>
+<main class="wrap">
 <a class="back" href="/">← 返回 Project5 控制台</a>
-<section class="hero"><div class="muted">Project5 · 学习版文档</div><h1>API 中文入门：从“什么是 API”到真正调用 TTS</h1><p class="muted">适合第一次接触 API。看完以后，你应该能理解 API Key、POST、JSON、task_id、轮询和 audio_url 分别在做什么。</p></section>
-<section class="section"><h2>1. API 是什么？</h2><p>API 可以理解为“程序之间办事的窗口”。你的 AI 视频程序不需要知道 Kokoro 模型怎么加载，只需要把文字交给 Project5，然后拿回生成结果。</p><div class="flow">你的 AI 视频项目<br>↓ 提交文字<br><b>Project5 TTS API</b><br>↓ 返回任务编号 task_id<br>你的项目查询任务进度<br>↓<br>拿到 audio_url<br>↓<br>继续合成视频</div><div class="tip">一句话：Project5 把“语音生成”封装成一个独立服务，其他项目只负责调用它。</div></section>
-<section class="section"><h2>2. 一次 API 请求由哪些部分组成？</h2><div class="code">POST /v1/audio/speech
+<section class="hero">
+<div class="kicker">PROJECT5 · API 小白学习版</div>
+<h1>不会写代码也能先看懂：Project5 API 到底怎么调用？</h1>
+<p class="muted">你不用先学会后端、HTTP、JSON。先把 API 理解成“两个程序之间办事的窗口”。看完这页，你至少会知道：API Key 是什么、为什么先拿 task_id、什么时候才能拿到 audio_url，以及怎样把整段说明直接交给 AI 帮你完成接入。</p>
+<div class="recommended">
+<div><span>默认推荐记忆名</span><b>ETG1</b></div>
+<div><span>真实 API voice</span><b>zh-TW-YunJheNeural</b></div>
+<div><span>声音</span><b>Edge 云哲 · 台湾男声</b></div>
+<div><span>推荐语速</span><b>1.10</b></div>
+</div>
+<div class="tip"><b>最重要的一点：</b>ETG1 是方便记忆的推荐名，不是 API 参数。真正发给 Project5 的 <code>voice</code> 必须是 <code>zh-TW-YunJheNeural</code>。</div>
+</section>
+
+<section class="section"><h2>1. API 是什么？</h2><p>假设你以后做一个 AI 视频项目。视频项目需要配音，但它不应该自己重新安装一套 TTS。它只把文字交给 Project5，然后等 Project5 返回音频。</p><div class="flow"><span>你的业务项目</span><span class="arrow">→</span><span>提交文字</span><span class="arrow">→</span><span>Project5</span><span class="arrow">→</span><span>生成语音</span><span class="arrow">→</span><span>audio_url</span></div><div class="tip">一句话：Project5 专门负责语音，其他项目只负责“调用”。</div></section>
+
+<section class="section"><h2>2. 先认识 6 个最重要的词</h2><div class="terms"><div class="term"><b>BASE_URL</b><span>Project5 的地址，相当于店铺地址。</span></div><div class="term"><b>API Key</b><span>调用权限通行证。</span></div><div class="term"><b>Endpoint</b><span>具体功能窗口，例如 /v1/audio/speech。</span></div><div class="term"><b>POST</b><span>向服务器提交一件事情。</span></div><div class="term"><b>JSON</b><span>提交给服务器的一张参数表。</span></div><div class="term"><b>task_id</b><span>任务取件号，用它继续查询进度。</span></div></div></section>
+
+<section class="section"><h2>3. 调用前只准备两个东西</h2><div class="steps"><div class="step"><div class="num">1</div><div class="step-body"><b>Project5 地址</b><div class="code">PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST</div><p class="muted">以后所有接口都从这个地址开始。</p></div></div><div class="step"><div class="num">2</div><div class="step-body"><b>API Key</b><p class="muted">Project5 后台左侧进入「API 密钥」→ 创建密钥 → 保存完整 Key。</p><div class="code">PROJECT5_API_KEY=YOUR_API_KEY</div><p class="muted">请求时使用：Authorization: Bearer YOUR_API_KEY</p></div></div></div><div class="warn">真实 API Key 不要写进公开 GitHub、浏览器前端、公开截图或日志。</div></section>
+
+<section class="section"><h2>4. 第一次请求直接照着这个写</h2><p>先不要研究其他音色。第一次接通业务，默认使用 ETG1 对应的 Edge 云哲台湾男声和 1.10 语速。</p><div class="code">POST /v1/audio/speech
 Authorization: Bearer YOUR_API_KEY
 Content-Type: application/json
 
 {
-  "input": "今天学习 ChatGPT and LangChain，然后继续中文。",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "speed": 1.0
-}</div><table><tr><th>部分</th><th>意思</th></tr><tr><td><code>POST</code></td><td>提交数据，让服务器执行一件事</td></tr><tr><td><code>/v1/audio/speech</code></td><td>语音生成这个功能的地址</td></tr><tr><td><code>Authorization</code></td><td>身份认证</td></tr><tr><td><code>Bearer API_KEY</code></td><td>你的调用通行证</td></tr><tr><td><code>JSON</code></td><td>你交给服务器的参数表单</td></tr></table></section>
-<section class="section"><h2>3. 为什么先返回 task_id，而不是直接返回音频？</h2><p>TTS 可能需要几秒甚至更久，所以 Project5 使用异步任务。</p><div class="flow"><b>POST /v1/audio/speech</b><br>↓<br>HTTP 202 + task_id<br>↓<br><b>GET /v1/tasks/{id}</b><br>↓<br>queued → processing → completed<br>↓<br>读取 audio_url</div><p><code>202 Accepted</code> 的意思是“任务已经接收”，不是“已经生成完成”。</p></section>
-<section class="section"><h2>4. 获取音色</h2><h3>Kokoro</h3><div class="code">GET /v1/voices?engine=kokoro</div><h3>Edge</h3><div class="code">GET /v1/voices?engine=edge</div><p>后台音色表里的 <b>API ID</b>，例如 <code>zf_001</code>，就是请求里的 <code>voice</code>。</p></section>
-<section class="section"><h2>5. Kokoro 调用</h2><div class="code">POST /v1/audio/speech
-Authorization: Bearer YOUR_API_KEY
-Content-Type: application/json
-
-{
-  "input": "你好，today we test ChatGPT，然后继续中文。",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "speed": 1.0
-}</div><p>Kokoro 在服务器本地 CPU 推理，最终生成 WAV。</p></section>
-<section class="section"><h2>6. Edge 调用</h2><div class="code">POST /v1/audio/speech
-Authorization: Bearer YOUR_API_KEY
-Content-Type: application/json
-
-{
-  "input": "你好，这是 Edge TTS 测试。",
+  "input": "你好，这是 Project5 API 的第一次测试。",
   "engine": "edge",
-  "voice": "zh-CN-XiaoxiaoNeural",
-  "speed": 1.0
-}</div><p>Edge 需要服务器联网，最终生成 MP3。</p></section>
-<section class="section"><h2>7. 查询任务</h2><div class="code">GET /v1/tasks/TASK_ID
-Authorization: Bearer YOUR_API_KEY</div><p>完成以后会看到类似：</p><div class="code">{
-  "id": "tts_...",
+  "voice": "zh-TW-YunJheNeural",
+  "speed": 1.10
+}</div><table><tr><th>参数</th><th>意思</th><th>第一次推荐</th></tr><tr><td><code>input</code></td><td>要朗读的文字</td><td>你的文本</td></tr><tr><td><code>engine</code></td><td>TTS 引擎</td><td>edge</td></tr><tr><td><code>voice</code></td><td>声音 ID</td><td>zh-TW-YunJheNeural</td></tr><tr><td><code>speed</code></td><td>语速</td><td>1.10</td></tr></table></section>
+
+<section class="section"><h2>5. 为什么不是马上返回 MP3？</h2><p>因为生成语音可能需要几秒或更久。Project5 用的是“异步任务”：先接单，再让你的程序拿任务号查询。</p><div class="flow"><span>POST</span><span class="arrow">→</span><span>HTTP 202</span><span class="arrow">→</span><span>task_id</span><span class="arrow">→</span><span>GET 查询</span><span class="arrow">→</span><span>completed</span><span class="arrow">→</span><span>audio_url</span></div><div class="warn"><code>202 Accepted</code> 只代表“任务已经接收”，不代表“音频已经生成完成”。</div></section>
+
+<section class="section"><h2>6. POST 后你会拿到一个 task_id</h2><div class="code">{
+  "id": "tts_20260907_xxxxxxxxxx",
+  "status": "queued",
+  "engine": "edge",
+  "voice": "zh-TW-YunJheNeural"
+}</div><p>其中最重要的是 <code>id</code>。把它理解成快递取件号，后面要靠它查进度。</p></section>
+
+<section class="section"><h2>7. 用 task_id 查询任务</h2><div class="code">GET /v1/tasks/tts_20260907_xxxxxxxxxx
+Authorization: Bearer YOUR_API_KEY</div><table><tr><th>状态</th><th>程序应该做什么</th></tr><tr><td>queued</td><td>等大约 1 秒，再查一次</td></tr><tr><td>processing</td><td>继续等待</td></tr><tr><td>completed</td><td>读取 audio_url</td></tr><tr><td>failed</td><td>停止轮询，读取 error</td></tr></table><p class="muted">程序必须有总超时，比如 180 秒，不要无限查询。</p></section>
+
+<section class="section"><h2>8. completed 后才真正拿到音频</h2><div class="code">{
+  "id": "tts_20260907_xxxxxxxxxx",
   "status": "completed",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "audio_url": "http://YOUR_HOST/audio/tts_....wav"
-}</div></section>
-<section class="section"><h2>8. Python 完整示例</h2><div class="code">import time
+  "engine": "edge",
+  "voice": "zh-TW-YunJheNeural",
+  "audio_url": "http://YOUR_PROJECT5_HOST/audio/tts_20260907_xxxxxxxxxx.mp3"
+}</div><p><code>audio_url</code> 才是最终成品地址。你的项目可以播放、下载、长期转存，或者继续交给视频合成程序。</p></section>
+
+<section class="section"><h2>9. 一句话记住整个 API</h2><div class="code">API Key = 通行证
+POST = 下单
+202 = 已接单
+id = 取件号
+GET /v1/tasks/{id} = 查进度
+audio_url = 最终成品</div></section>
+
+<section class="section"><h2>10. curl 第一次测试</h2><div class="code-head"><b>提交任务</b><button class="btn secondary" id="copyCurl">复制 curl</button></div><div class="code" id="curlCode">curl -X POST "$PROJECT5_BASE_URL/v1/audio/speech" \
+  -H "Authorization: Bearer $PROJECT5_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "你好，这是 Project5 API 的第一次测试。",
+    "engine": "edge",
+    "voice": "zh-TW-YunJheNeural",
+    "speed": 1.10
+  }'</div><p>返回 id 后，再查询：</p><div class="code">curl \
+  -H "Authorization: Bearer $PROJECT5_API_KEY" \
+  "$PROJECT5_BASE_URL/v1/tasks/你的task_id"</div></section>
+
+<section class="section"><h2>11. Python 完整最小示例</h2><p>这段代码已经包含提交、保存 task_id、轮询和取得 audio_url 的完整流程。</p><div class="code">import os
+import time
 import requests
 
-BASE_URL = "http://YOUR_HOST"
-API_KEY = "YOUR_API_KEY"
-headers = {"Authorization": f"Bearer {API_KEY}"}
+BASE_URL = os.environ["PROJECT5_BASE_URL"].rstrip("/")
+API_KEY = os.environ["PROJECT5_API_KEY"]
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 
-r = requests.post(
-    f"{BASE_URL}/v1/audio/speech",
-    headers=headers,
-    json={
-        "input": "今天学习 ChatGPT and LangChain，然后继续中文。",
-        "engine": "kokoro",
-        "voice": "zf_001",
-        "speed": 1.0,
-    },
-    timeout=30,
-)
-r.raise_for_status()
-task_id = r.json()["id"]
 
-while True:
-    task = requests.get(
-        f"{BASE_URL}/v1/tasks/{task_id}",
-        headers=headers,
-        timeout=30,
-    ).json()
-    if task["status"] == "completed":
-        print(task["audio_url"])
-        break
-    if task["status"] == "failed":
-        raise RuntimeError(task.get("error"))
-    time.sleep(1)</div></section>
-<section class="section"><h2>9. 固定试听与正式音频</h2><table><tr><th>类型</th><th>用途</th><th>保存策略</th></tr><tr><td>固定试听</td><td>比较音色、写备注</td><td>永久保存，不参与 24h 清理</td></tr><tr><td>正式生成音频</td><td>视频、播客真正使用</td><td>手动清理，或开启 24h 自动清理</td></tr></table></section>
-<section class="section"><h2>10. 常见状态码</h2><table><tr><th>状态</th><th>含义</th></tr><tr><td>200</td><td>请求成功</td></tr><tr><td>202</td><td>任务已接收，正在异步处理</td></tr><tr><td>400</td><td>参数错误，例如 voice 不存在</td></tr><tr><td>401</td><td>API Key 不正确</td></tr><tr><td>404</td><td>任务或音频不存在</td></tr><tr><td>500</td><td>服务器内部错误</td></tr></table><div class="warn">不要把真正的 API Key 写到 GitHub 公共仓库，也不要直接写在公开网页 JavaScript 里。正式项目最好由你自己的后端保存 Key。</div></section>
-<section class="section"><h2>11. 最后记住这 7 个词</h2><div class="flow">API Key = 通行证<br>Endpoint = 办事窗口<br>POST = 提交任务<br>JSON = 参数表单<br>202 + task_id = 取件号<br>GET /v1/tasks/{id} = 查进度<br>audio_url = 最终结果</div></section>
-</main></body></html>
+def submit_tts(text, voice="zh-TW-YunJheNeural", speed=1.10):
+    r = requests.post(
+        f"{BASE_URL}/v1/audio/speech",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json={
+            "input": text,
+            "engine": "edge",
+            "voice": voice,
+            "speed": speed,
+        },
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def wait_for_task(task_id, timeout_seconds=180):
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        r = requests.get(
+            f"{BASE_URL}/v1/tasks/{task_id}",
+            headers=HEADERS,
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if data["status"] == "completed":
+            return data["audio_url"]
+        if data["status"] == "failed":
+            raise RuntimeError(data.get("error") or data)
+        time.sleep(1)
+    raise TimeoutError("Project5 TTS task timeout")
+
+
+task_id = submit_tts("你好，这是 Project5 API 测试。")
+print(wait_for_task(task_id))</div></section>
+
+<section class="section"><h2>12. Edge 和 Kokoro 怎么选？</h2><table><tr><th>引擎</th><th>怎么理解</th><th>建议</th></tr><tr><td><b>Edge</b></td><td>在线语音，需要服务器联网，通常输出 MP3</td><td>第一次接入默认推荐</td></tr><tr><td><b>Kokoro</b></td><td>本地 CPU 推理，通常输出 WAV</td><td>需要本地生成或指定 Kokoro 音色时</td></tr></table><p>如果要换其他音色，先查真实 ID：</p><div class="code">GET /v1/voices?engine=edge
+GET /v1/voices?engine=kokoro</div></section>
+
+<section class="section"><h2>13. 常见错误</h2><table><tr><th>现象</th><th>先检查</th></tr><tr><td>401 / 403</td><td>API Key、Bearer、Key 是否启用</td></tr><tr><td>400 Unknown voice</td><td>不要传 ETG1；传 zh-TW-YunJheNeural</td></tr><tr><td>一直 queued / processing</td><td>继续轮询，但设置总超时；同时查看后台生成任务</td></tr><tr><td>status=failed</td><td>读取 error，不要只显示“失败”</td></tr><tr><td>audio_url 以后失效</td><td>检查后台是否开启 24 小时自动清理；需要长期保存就及时转存</td></tr></table></section>
+
+<section class="section"><div class="ai-box"><h2>14. 不会接？整段复制给 AI，让它直接干活</h2><p class="muted">下面这段不仅说明接口，还告诉 AI：读完以后要检查你的项目、添加环境变量、封装客户端、默认用云哲 1.10、处理异常并实际验证。</p><div class="actions"><button class="btn" id="copyAI">一键复制给 AI</button></div><div class="code" id="aiCode">你正在接入一个已经独立部署好的 TTS 服务：Project5。
+
+不要把 Kokoro / Edge 模型代码复制进当前业务项目。请通过 HTTP API 完成真正接入。
+
+默认推荐：
+engine=edge
+voice=zh-TW-YunJheNeural
+speed=1.10
+说明：用户记忆名 ETG1，显示名 Edge 云哲 · 台湾男声。ETG1 不能直接作为 voice 参数。
+
+环境变量：
+PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST
+PROJECT5_API_KEY=YOUR_API_KEY
+认证：Authorization: Bearer YOUR_API_KEY
+
+公开 API：
+GET /v1/voices?engine=edge
+GET /v1/voices?engine=kokoro
+POST /v1/audio/speech
+GET /v1/tasks/{task_id}
+
+默认 POST Body：
+{
+  "input": "要朗读的文字",
+  "engine": "edge",
+  "voice": "zh-TW-YunJheNeural",
+  "speed": 1.10
+}
+
+异步规则：POST 成功后通常返回 HTTP 202 和 id。保存 id 作为 task_id，每约 1 秒 GET /v1/tasks/{task_id}。queued/processing 继续等待；completed 读取 audio_url；failed 抛出 error；必须设置总超时。
+
+你读完以后必须继续实际完成：
+1. 检查当前项目语言、框架、已有 HTTP 客户端和配置方式。
+2. 添加 PROJECT5_BASE_URL / PROJECT5_API_KEY 环境变量，密钥只能放服务端安全配置。
+3. 封装 get_voices(engine)、submit_tts(text, engine, voice, speed)、wait_for_task(task_id)。
+4. 用户未指定时默认使用 edge + zh-TW-YunJheNeural + 1.10。
+5. 实现 202 → task_id → 轮询 → completed → audio_url 完整流程。
+6. 处理 400、401/403、404、429/5xx、failed、网络超时和总超时。
+7. 当前环境可访问 Project5 时，实际提交一条短文本做端到端测试；不能联网时至少完成可运行代码和测试，并明确说明未联网验证。
+8. 完成后告诉用户：修改文件、环境变量、业务调用方式、默认音色、验证结果和仍需用户填写的内容。
+
+禁止：不要把 ETG1 当 voice；不要假设 POST 后音频已完成；不要猜 voice ID；不要暴露 API Key；不要重写 Project5 内部模型，除非用户明确要求修改 Project5 本身。</div></div></section>
+</main>
+<script>
+async function copyText(text){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}}catch(e){}const t=document.createElement('textarea');t.value=text;t.setAttribute('readonly','');t.style.position='fixed';t.style.left='-9999px';document.body.appendChild(t);t.select();const ok=document.execCommand('copy');t.remove();return ok}
+document.getElementById('copyAI').onclick=async()=>{const ok=await copyText(document.getElementById('aiCode').innerText);alert(ok?'已复制，直接粘贴给 AI 即可':'复制失败，请手动选择代码块')};
+document.getElementById('copyCurl').onclick=async()=>{const ok=await copyText(document.getElementById('curlCode').innerText);alert(ok?'curl 已复制':'复制失败，请手动选择代码块')};
+</script>
+</body>
+</html>
