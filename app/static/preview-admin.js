@@ -1,12 +1,16 @@
 (() => {
   const DEFAULT_TEXT = '嗨，今天聊点轻松的。I really like simple tools that just work. 最近我在用 ChatGPT 和 LangChain 做 AI 小工具，and it feels pretty useful. 好，我们继续吧。';
-  const state = { manifest: { text: DEFAULT_TEXT, text_hash: '', kokoro: {}, edge: {}, counts: {} }, jobs: {} };
+  const PREVIEW_SPEED = 1.0;
+  const state = {
+    manifest: { text: DEFAULT_TEXT, text_hash: '', kokoro: {}, edge: {}, counts: {} },
+    jobs: {},
+    dirty: { kokoro: false, edge: false }
+  };
 
   function engineLabel(engine) { return engine === 'edge' ? 'Edge' : 'Kokoro'; }
   function selector(engine, suffix) { return document.querySelector(`#${engine}${suffix}`); }
   function editor(engine) { return document.querySelector(`#${engine}PreviewTemplate`); }
   function selectedVoice(engine) { return selector(engine, 'Voice')?.value || ''; }
-  function selectedSpeed(engine) { return Number(selector(engine, 'Speed')?.value || 1); }
 
   function setStatus(engine, text, kind = 'processing') {
     const el = selector(engine, 'PreviewStatus');
@@ -15,10 +19,10 @@
     el.className = `badge ${kind}`;
   }
 
-  function syncEditors(text) {
+  function syncEditors(text, force = false) {
     ['kokoro', 'edge'].forEach(engine => {
       const el = editor(engine);
-      if (el && document.activeElement !== el) el.value = text;
+      if (el && (force || !state.dirty[engine])) el.value = text;
     });
   }
 
@@ -74,13 +78,20 @@
   async function saveTemplate(engine, silent = false) {
     const text = (editor(engine)?.value || '').trim();
     if (!text) throw new Error('试听文案不能为空');
-    if (text === state.manifest.text) return state.manifest;
+    if (text === state.manifest.text) {
+      state.dirty.kokoro = false;
+      state.dirty.edge = false;
+      syncEditors(text, true);
+      return state.manifest;
+    }
     const data = await adminApi('/admin/previews/text', {
       method: 'PUT',
       body: JSON.stringify({ text })
     });
     state.manifest = data;
-    syncEditors(data.text);
+    state.dirty.kokoro = false;
+    state.dirty.edge = false;
+    syncEditors(data.text, true);
     ['kokoro', 'edge'].forEach(refreshManualPreview);
     if (!silent && typeof toast === 'function') toast('试听文案已保存；旧音频保留并标记为旧版本');
     return data;
@@ -118,7 +129,7 @@
       if (!voice) throw new Error('请先选择音色');
       const job = await adminApi('/admin/previews/generate', {
         method: 'POST',
-        body: JSON.stringify({ engine, voice, speed: selectedSpeed(engine) })
+        body: JSON.stringify({ engine, voice, speed: PREVIEW_SPEED })
       });
       await pollJob(job.id, engine, button);
     } catch (err) {
@@ -131,14 +142,14 @@
   async function generateAll(engine) {
     const count = state.manifest?.counts?.[engine];
     const total = count?.total || (engine === 'kokoro' ? 103 : 14);
-    if (!confirm(`手动生成/补齐 ${engineLabel(engine)} 的全部 ${total} 个固定试听？\n已是当前文案的音色会自动跳过，生成文件会永久保存在服务器本地。`)) return;
+    if (!confirm(`手动生成/补齐 ${engineLabel(engine)} 的全部 ${total} 个固定试听？\n固定试听统一使用 1.0x 语速；已是当前文案的音色会自动跳过，生成文件会永久保存在服务器本地。`)) return;
     const button = document.querySelector(`#${engine}GenerateAllPreview`);
     if (button) button.disabled = true;
     try {
       await saveTemplate(engine, true);
       const job = await adminApi('/admin/previews/generate-batch', {
         method: 'POST',
-        body: JSON.stringify({ engine, priority_voice: selectedVoice(engine), speed: selectedSpeed(engine) })
+        body: JSON.stringify({ engine, priority_voice: selectedVoice(engine), speed: PREVIEW_SPEED })
       });
       await pollJob(job.id, engine, button);
     } catch (err) {
@@ -170,7 +181,7 @@
     if (oldText) oldText.style.display = 'none';
 
     const note = document.querySelector(`#${engine} .engine-note`);
-    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以手动补齐全部音色；生成后的试听会永久保存在服务器本地。';
+    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以手动补齐全部音色；固定试听统一为 1.0x，生成后的试听会永久保存在服务器本地。';
 
     const controls = document.createElement('div');
     controls.innerHTML = `
@@ -184,10 +195,12 @@
         <button class="btn small secondary" id="${engine}GenerateAllPreview">手动补齐全部音色</button>
         <span class="muted" id="${engine}PreviewCount">读取中</span>
       </div>
-      <div class="muted" style="margin-bottom:12px">不会再自动后台生成。只有你点击生成时才工作；生成后的试听文件保存在服务器本地，部署和普通音频清理都不会删除。修改文案后，旧试听仍可播放，但会标记为“旧文案试听”。</div>`;
+      <div class="muted" style="margin-bottom:12px">不会再自动后台生成。只有你点击生成时才工作；固定试听统一 1.0x，并永久保存在服务器本地，部署和普通音频清理都不会删除。修改文案后，旧试听仍可播放，但会标记为“旧文案试听”。未保存的编辑内容也不会被定时刷新覆盖。</div>`;
     const player = box.querySelector('.preview-player');
     box.insertBefore(controls, player || null);
 
+    const textEditor = editor(engine);
+    if (textEditor) textEditor.addEventListener('input', () => { state.dirty[engine] = true; });
     document.querySelector(`#${engine}SavePreviewText`).onclick = () => saveTemplate(engine).catch(err => toast(err.message));
     document.querySelector(`#${engine}GeneratePreview`).onclick = () => generateCurrent(engine);
     document.querySelector(`#${engine}GenerateAllPreview`).onclick = () => generateAll(engine);
