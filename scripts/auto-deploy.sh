@@ -37,15 +37,19 @@ set_env_value KOKORO_THREADS 8
 set_env_value KOKORO_ONNX_MODEL "${PROJECT_DIR}/models/kokoro-v1.1-zh.onnx"
 set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/models/voices-v1.1-zh.bin"
 set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/models/config.json"
-set_env_value MELO_PORT 8016
-set_env_value MELO_THREADS 4
 chmod 600 .env
 set -a
+# shellcheck disable=SC1091
 source .env
 set +a
 PORT="${PROJECT5_PORT:-8005}"
 
-echo '[2/5] 启动 Kokoro/Edge 部署 worker'
+# MeloTTS is no longer part of the production path. Kill a previous background
+# installer/service so it cannot keep consuming CPU/RAM/disk on an 8G server.
+pkill -f 'scripts/setup-melo.sh' >/dev/null 2>&1 || true
+bash "$PROJECT_DIR/scripts/stop-melo.sh" >/dev/null 2>&1 || true
+
+echo '[2/5] 启动 Kokoro + Edge 主部署 worker'
 LOG_FILE="$PROJECT_DIR/logs/bootstrap-runtime.log"
 WORKER="$PROJECT_DIR/scripts/repair-runtime-assets.sh"
 if command -v setsid >/dev/null 2>&1; then nohup setsid bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null &
@@ -53,20 +57,20 @@ else nohup bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null & fi
 BOOT_PID=$!
 disown "$BOOT_PID" 2>/dev/null || true
 
-echo '[3/5] 后台安装/启动独立 MeloTTS CPU runtime（首次安装较久，不阻塞页面上线）'
-MELO_LOG="$PROJECT_DIR/logs/melo-setup.log"
-if command -v setsid >/dev/null 2>&1; then nohup setsid bash "$PROJECT_DIR/scripts/setup-melo.sh" >> "$MELO_LOG" 2>&1 < /dev/null &
-else nohup bash "$PROJECT_DIR/scripts/setup-melo.sh" >> "$MELO_LOG" 2>&1 < /dev/null & fi
-MELO_PID=$!
-disown "$MELO_PID" 2>/dev/null || true
+echo '[3/5] 后台准备 Kokoro 官方 Misaki 英文 G2P（不是第二个 TTS 模型）'
+EN_LOG="$PROJECT_DIR/logs/kokoro-english-setup.log"
+if command -v setsid >/dev/null 2>&1; then nohup setsid bash "$PROJECT_DIR/scripts/setup-kokoro-english.sh" >> "$EN_LOG" 2>&1 < /dev/null &
+else nohup bash "$PROJECT_DIR/scripts/setup-kokoro-english.sh" >> "$EN_LOG" 2>&1 < /dev/null & fi
+EN_PID=$!
+disown "$EN_PID" 2>/dev/null || true
 
-echo "[4/5] deploy worker=${BOOT_PID} melo-setup=${MELO_PID}；等待三引擎新版页面真实上线"
+echo "[4/5] deploy worker=${BOOT_PID} english-g2p=${EN_PID}；等待双引擎页面真实上线"
 LIVE=0
 for _ in {1..120}; do
   PAGE="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
   if printf '%s' "$PAGE" | grep -q 'Kokoro 本地试听' \
-    && printf '%s' "$PAGE" | grep -q 'MeloTTS 本地试听' \
-    && printf '%s' "$PAGE" | grep -q 'Edge 在线试听'; then
+    && printf '%s' "$PAGE" | grep -q 'Edge 在线试听' \
+    && ! printf '%s' "$PAGE" | grep -q 'MeloTTS 本地试听'; then
     LIVE=1
     break
   fi
@@ -74,14 +78,14 @@ for _ in {1..120}; do
 done
 
 if [ "$LIVE" -eq 1 ]; then
-  echo '[5/5] [OK] 新版三引擎后台已在线：Kokoro + MeloTTS + Edge'
-  echo '[Project5] MeloTTS 首次依赖/模型准备继续在后台进行，可在页面查看“运行时已启动/模型已加载”。'
+  echo '[5/5] [OK] 新版双引擎后台已在线：Kokoro + Edge'
+  echo '[Project5] Kokoro 官方英文 G2P 增强会在后台准备完成后自动重启一次 API，并做真实中英生成测试。'
   exit 0
 fi
 
-echo '[5/5] [ERROR] 120 秒内没有看到新版三引擎后台，因此本次部署不能标记成功。'
+echo '[5/5] [ERROR] 120 秒内没有看到新版双引擎后台，因此本次部署不能标记成功。'
 echo '[Project5] 最近主部署日志：'
 tail -n 100 "$LOG_FILE" || true
-echo '[Project5] 最近 MeloTTS 安装日志：'
-tail -n 60 "$MELO_LOG" || true
+echo '[Project5] 最近英文 G2P 日志：'
+tail -n 80 "$EN_LOG" || true
 exit 1
