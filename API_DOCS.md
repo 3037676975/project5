@@ -5,7 +5,35 @@
 
 ---
 
-## 先记住默认推荐设置
+## 先记住两个最重要的信息
+
+### 当前 Project5 公网请求地址
+
+```text
+http://186.244.245.177:28442
+```
+
+以后所有公开 API 都从这个地址开始。
+
+例如：
+
+```text
+生成语音：
+http://186.244.245.177:28442/v1/audio/speech
+
+查询任务：
+http://186.244.245.177:28442/v1/tasks/{task_id}
+
+Edge 音色：
+http://186.244.245.177:28442/v1/voices?engine=edge
+
+Kokoro 音色：
+http://186.244.245.177:28442/v1/voices?engine=kokoro
+```
+
+如果以后 Project5 换成正式域名，只需要把前面的 BASE_URL 换掉，后面的 `/v1/...` 路径不用改。
+
+### 默认推荐设置
 
 第一次接入 Project5，不需要先研究几十个音色。
 
@@ -69,15 +97,33 @@ Project5 专门负责 TTS
 
 ## 2.1 Project5 地址
 
-以后用：
+当前直接使用：
 
 ```text
-PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST
+PROJECT5_BASE_URL=http://186.244.245.177:28442
 ```
 
-它就是 Project5 的服务器地址。
+它就是 Project5 的服务器/API 基础地址。
 
 你可以把它理解成“店铺地址”。
+
+例如生成语音这个功能的完整地址就是：
+
+```text
+http://186.244.245.177:28442/v1/audio/speech
+```
+
+这里：
+
+```text
+http://186.244.245.177:28442
+= BASE_URL
+
+/v1/audio/speech
+= 具体接口路径
+```
+
+两部分拼起来就是完整请求地址。
 
 ---
 
@@ -88,7 +134,7 @@ PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST
 ```text
 API 密钥
 → 创建密钥
-→ 保存完整 Key
+→ 复制完整 Key
 ```
 
 调用 API 时带上：
@@ -113,6 +159,7 @@ API Key 可以理解成“通行证”。
 正式项目应该放在环境变量里：
 
 ```text
+PROJECT5_BASE_URL=http://186.244.245.177:28442
 PROJECT5_API_KEY=YOUR_API_KEY
 ```
 
@@ -122,7 +169,7 @@ PROJECT5_API_KEY=YOUR_API_KEY
 
 | 名词 | 你可以怎么理解 |
 |---|---|
-| BASE_URL | Project5 的地址 |
+| BASE_URL | Project5 的基础请求地址 |
 | API Key | 调用权限通行证 |
 | Endpoint | 某个具体功能的窗口 |
 | POST | 向服务器提交一件事情 |
@@ -132,7 +179,7 @@ PROJECT5_API_KEY=YOUR_API_KEY
 例如：
 
 ```http
-POST /v1/audio/speech
+POST http://186.244.245.177:28442/v1/audio/speech
 ```
 
 意思就是：
@@ -145,10 +192,10 @@ POST /v1/audio/speech
 
 # 4. 第一次调用，直接用默认推荐音色
 
-推荐请求：
+完整请求：
 
 ```http
-POST /v1/audio/speech
+POST http://186.244.245.177:28442/v1/audio/speech
 Authorization: Bearer YOUR_API_KEY
 Content-Type: application/json
 ```
@@ -242,10 +289,10 @@ id
 
 # 7. 拿 task_id 查询任务
 
-请求：
+完整请求地址：
 
 ```http
-GET /v1/tasks/tts_20260907_xxxxxxxxxx
+GET http://186.244.245.177:28442/v1/tasks/tts_20260907_xxxxxxxxxx
 Authorization: Bearer YOUR_API_KEY
 ```
 
@@ -301,7 +348,7 @@ failed
   "status": "completed",
   "engine": "edge",
   "voice": "zh-TW-YunJheNeural",
-  "audio_url": "http://YOUR_PROJECT5_HOST/audio/tts_20260907_xxxxxxxxxx.mp3"
+  "audio_url": "http://186.244.245.177:28442/audio/tts_20260907_xxxxxxxxxx.mp3"
 }
 ```
 
@@ -330,7 +377,7 @@ audio_url
 把前面所有知识合起来，其实就是：
 
 ```text
-1. 准备 BASE_URL
+1. BASE_URL = http://186.244.245.177:28442
 2. 准备 API Key
 3. POST /v1/audio/speech
 4. 得到 HTTP 202
@@ -344,6 +391,7 @@ audio_url
 一句话记忆：
 
 ```text
+BASE_URL = Project5 地址
 API Key = 通行证
 POST = 下单
 202 = 已接单
@@ -356,7 +404,14 @@ audio_url = 最终成品
 
 # 10. curl 第一次测试
 
-Linux / macOS 可以这样测试：
+先设置地址和 API Key：
+
+```bash
+export PROJECT5_BASE_URL="http://186.244.245.177:28442"
+export PROJECT5_API_KEY="你的完整API密钥"
+```
+
+然后提交生成任务：
 
 ```bash
 curl -X POST "$PROJECT5_BASE_URL/v1/audio/speech" \
@@ -389,7 +444,11 @@ import os
 import time
 import requests
 
-BASE_URL = os.environ["PROJECT5_BASE_URL"].rstrip("/")
+BASE_URL = os.environ.get(
+    "PROJECT5_BASE_URL",
+    "http://186.244.245.177:28442",
+).rstrip("/")
+
 API_KEY = os.environ["PROJECT5_API_KEY"]
 
 HEADERS = {
@@ -482,13 +541,13 @@ wait_for_task()
 ## Edge 音色
 
 ```http
-GET /v1/voices?engine=edge
+GET http://186.244.245.177:28442/v1/voices?engine=edge
 ```
 
 ## Kokoro 音色
 
 ```http
-GET /v1/voices?engine=kokoro
+GET http://186.244.245.177:28442/v1/voices?engine=kokoro
 ```
 
 程序应该使用接口真实返回的 `id`。
@@ -620,7 +679,13 @@ AI_API_CONTEXT.md
 
 把整份内容复制给 AI。
 
-它里面不仅告诉 AI 接口是什么，还明确要求 AI：
+它里面不仅告诉 AI 接口是什么，还明确告诉 AI 当前 Project5 请求地址：
+
+```text
+http://186.244.245.177:28442
+```
+
+并要求 AI：
 
 ```text
 检查你的项目
@@ -639,9 +704,9 @@ AI_API_CONTEXT.md
 
 ```text
 文字
-→ POST
+→ POST http://186.244.245.177:28442/v1/audio/speech
 → task_id
-→ 查询
+→ 查询任务
 → audio_url
 ```
 
