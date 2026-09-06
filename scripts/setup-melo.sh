@@ -45,11 +45,9 @@ if [ ! -x "$VENV/bin/python" ]; then
 fi
 
 "$VENV/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
-# MeloTTS pins librosa 0.9.1, which still imports pkg_resources. New setuptools
-# releases removed that legacy module, so keep a compatible setuptools release.
 "$VENV/bin/python" -m pip install -q --upgrade pip wheel 'setuptools==80.9.0'
 
-REQ_HASH="$(sha256sum "$RUNTIME_DIR/requirements.txt" | awk '{print $1}')-project5-v4-torch231cpu-setuptools809"
+REQ_HASH="$(sha256sum "$RUNTIME_DIR/requirements.txt" | awk '{print $1}')-project5-v5-torch231cpu-setuptools809-unidiclite"
 OLD_HASH="$(cat "$PROJECT_DIR/.melo-requirements.sha256" 2>/dev/null || true)"
 if [ "$REQ_HASH" != "$OLD_HASH" ] || ! "$VENV/bin/python" - <<PY >/dev/null 2>&1
 import sys
@@ -67,15 +65,18 @@ then
     --extra-index-url https://download.pytorch.org/whl/cpu
 
   FILTERED="$PROJECT_DIR/.runtime/melo-requirements-project5.txt"
-  grep -vE '^(torch|torchaudio|gradio|tensorboard)([<=> ].*)?$' "$RUNTIME_DIR/requirements.txt" > "$FILTERED"
+  # Official requirements install both `unidic` and `unidic_lite`. On a fresh Linux
+  # machine the empty `unidic` package wins MeCab's dictionary discovery and points to
+  # a dicdir without mecabrc. MeloTTS itself only needs unidic-lite for this import path.
+  grep -vE '^(torch|torchaudio|gradio|tensorboard|unidic==)([<=> ].*)?$' "$RUNTIME_DIR/requirements.txt" > "$FILTERED"
   {
     echo 'numpy==1.23.5'
     echo 'scipy==1.10.1'
     echo 'huggingface-hub<1.0'
   } >> "$FILTERED"
   "$VENV/bin/python" -m pip install -r "$FILTERED"
-  # Re-assert setuptools after dependency installation in case another package moved it.
-  "$VENV/bin/python" -m pip install -q 'setuptools==80.9.0'
+  "$VENV/bin/python" -m pip uninstall -y unidic >/dev/null 2>&1 || true
+  "$VENV/bin/python" -m pip install -q 'unidic-lite==1.0.8' 'setuptools==80.9.0'
   echo "$REQ_HASH" > "$PROJECT_DIR/.melo-requirements.sha256"
 fi
 
@@ -86,6 +87,8 @@ export TOKENIZERS_PARALLELISM=false
 
 "$VENV/bin/python" - <<'PY'
 import pkg_resources
+import MeCab
+MeCab.Tagger()
 import torch
 from melo.api import TTS
 print('[MeloTTS] Python API import OK, torch=', torch.__version__)
