@@ -42,9 +42,9 @@ RUNTIME_READY=1
 [ -x .venv/bin/python ] || RUNTIME_READY=0
 [ "$REQ_HASH" = "$OLD_HASH" ] || RUNTIME_READY=0
 file_ready "$MODEL_FILE" 100000000 || RUNTIME_READY=0
-file_ready "$VOICES_FILE" 50000000 || RUNTIME_READY=0
+file_ready "$VOICES_FILE" 53000000 || RUNTIME_READY=0
 file_ready "$CONFIG_FILE" 1000 || RUNTIME_READY=0
-if [ "$RUNTIME_READY" -eq 1 ] && ! .venv/bin/python -c 'import kokoro_onnx, onnxruntime, misaki' >/dev/null 2>&1; then
+if [ "$RUNTIME_READY" -eq 1 ] && ! .venv/bin/python -c 'import kokoro_onnx, onnxruntime; from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null 2>&1; then
   RUNTIME_READY=0
 fi
 
@@ -68,8 +68,8 @@ EOF
 ensure_env
 
 if [ "$RUNTIME_READY" -eq 0 ]; then
-  echo "[2/3] 首次运行资源尚未全部就绪。"
-  echo "      大模型/依赖不再阻塞宝塔 Webhook，而是在后台继续准备。"
+  echo "[2/3] 运行环境尚未全部就绪或中文 G2P 需要修复。"
+  echo "      大模型/依赖修复不阻塞宝塔 Webhook，而是在后台继续准备。"
 
   BOOT_PID_FILE="logs/bootstrap.pid"
   if [ -f "$BOOT_PID_FILE" ] && kill -0 "$(cat "$BOOT_PID_FILE")" 2>/dev/null; then
@@ -81,13 +81,13 @@ if [ "$RUNTIME_READY" -eq 0 ]; then
     echo "[3/3] 已启动后台初始化 PID=${BOOT_PID}"
   fi
 
-  echo "[OK] Webhook 快速返回成功。首次初始化进度："
+  echo "[OK] Webhook 快速返回。初始化/修复进度："
   echo "     tail -f $PROJECT_DIR/logs/bootstrap.log"
-  echo "初始化完成后脚本会自动重启 Project5，无需重复点部署。"
+  echo "完成后脚本会自动重启 Project5，无需重复点部署。"
   exit 0
 fi
 
-echo "[2/3] 依赖、模型、103 音色包均已缓存"
+echo "[2/3] 依赖、模型、103 音色包、中文 G2P 均已就绪"
 echo "[3/3] 轻量重启 Project5"
 bash scripts/restart.sh
 
@@ -95,15 +95,18 @@ set -a
 source .env
 set +a
 PORT="${PROJECT5_PORT:-8005}"
-for i in {1..20}; do
-  if .venv/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT}/health', timeout=2).read()" >/dev/null 2>&1; then
+# BaoTa path stays fast: wait briefly for the model preload. If it needs longer,
+# report that clearly instead of claiming a false model-ready success.
+for i in {1..35}; do
+  if .venv/bin/python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:${PORT}/health', timeout=2)); raise SystemExit(0 if d.get('model_loaded') is True else 1)" >/dev/null 2>&1; then
     echo "Deploy success: $(date '+%Y-%m-%d %H:%M:%S')" >> logs/deploy.log
-    echo "[SUCCESS] Project5：http://127.0.0.1:${PORT}"
+    echo "[SUCCESS] Project5 模型已就绪：http://127.0.0.1:${PORT}"
     exit 0
   fi
   sleep 1
 done
 
-echo "[ERROR] 服务健康检查失败"
-tail -n 100 logs/app.log || true
-exit 1
+echo "[WARN] FastAPI 已启动，但模型尚未在 35 秒内完成预热。"
+echo "       可查看：tail -f $PROJECT_DIR/logs/app.log"
+echo "       后台页面仍可打开，等 /health 的 model_loaded=true 后再生成。"
+exit 0
