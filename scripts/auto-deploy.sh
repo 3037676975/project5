@@ -17,7 +17,7 @@ for candidate in python3.12 python3.11 python3.10 python3; do
   fi
 done
 [ -n "$PYTHON_BIN" ] || { echo '[ERROR] 需要 Python 3.10+'; exit 1; }
-echo "[1/3] Python: $($PYTHON_BIN --version)"
+echo "[1/4] Python: $($PYTHON_BIN --version)"
 
 set_env_value() {
   local key="$1" value="$2"
@@ -43,7 +43,27 @@ set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/models/voices-v1.1-zh.bin"
 set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/models/config.json"
 chmod 600 .env
 
-echo '[2/3] 已写入官方中文 FP32 模型路径'
+echo '[2/4] 已写入官方中文 FP32 模型路径'
+
+# Important recovery path: the model may finish downloading after an older API
+# process already failed its one-time background preload. In that case the browser
+# can correctly see the model file on disk while the running Python process still
+# keeps the old FileNotFoundError in memory. If all three runtime files are already
+# present, restart the API immediately so it loads the current Git checkout and the
+# now-existing model instead of waiting for another bootstrap cycle.
+MODEL_FILE="$PROJECT_DIR/models/kokoro-v1.1-zh.onnx"
+VOICES_FILE="$PROJECT_DIR/models/voices-v1.1-zh.bin"
+CONFIG_FILE="$PROJECT_DIR/models/config.json"
+MODEL_BYTES="$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)"
+VOICES_BYTES="$(stat -c%s "$VOICES_FILE" 2>/dev/null || echo 0)"
+CONFIG_BYTES="$(stat -c%s "$CONFIG_FILE" 2>/dev/null || echo 0)"
+
+if [ "$MODEL_BYTES" -ge 300000000 ] && [ "$VOICES_BYTES" -ge 53000000 ] && [ "$CONFIG_BYTES" -ge 1000 ]; then
+  echo '[3/4] 模型文件已经齐全，立即重启 API，清除旧的缺文件错误并加载最新代码'
+  bash "$PROJECT_DIR/scripts/restart.sh" || true
+else
+  echo "[3/4] 模型尚未齐全：model=${MODEL_BYTES} voices=${VOICES_BYTES} config=${CONFIG_BYTES}，交给后台 worker 下载"
+fi
 
 # Always launch the runtime worker. The worker itself uses flock, so stale PID files
 # can no longer block a deployment and simultaneous webhooks cannot run two downloads.
@@ -56,6 +76,6 @@ fi
 BOOT_PID=$!
 disown "$BOOT_PID" 2>/dev/null || true
 
-echo "[3/3] 已启动部署 worker PID=${BOOT_PID}"
-echo "[OK] 宝塔 Webhook 可以立即返回；后续由 worker 自动完成：依赖 → 官方模型 → 自测语音 → 重启 API。"
+echo "[4/4] 已启动部署 worker PID=${BOOT_PID}"
+echo "[OK] 宝塔 Webhook 可以立即返回；worker 会继续校验模型 → 官方中文自测 → 确认 API ready。"
 exit 0
