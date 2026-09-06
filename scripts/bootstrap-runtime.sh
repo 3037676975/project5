@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Project5 one-time/runtime bootstrap.
 # This script may take several minutes on first run and is intentionally launched
-# in the background by auto-deploy.sh so BaoTa's ~60s webhook timeout does not
-# mark a healthy deployment as failed.
+# in the background by auto-deploy.sh so BaoTa's webhook timeout does not mark a
+# healthy deployment as failed.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -80,29 +80,33 @@ MODEL_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-f
 VOICES_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.1-zh.bin"
 CONFIG_URL="https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh/resolve/main/config.json"
 
-download_resumable() {
-  local dest="$1" min_bytes="$2" url="$3" label="$4"
-  local size=0 tmp="${dest}.part"
-  if [ -f "$dest" ]; then size="$(stat -c%s "$dest" 2>/dev/null || echo 0)"; fi
+# Background bootstrap is not constrained by BaoTa's webhook timeout anymore.
+# Prefer a fresh atomic download over HTTP resume. GitHub release redirects can
+# make Range/resume behaviour inconsistent and previously left the voice pack as
+# a broken .part file even after curl reported 100% transfer.
+download_atomic() {
+  local dest="$1"
+  local min_bytes="$2"
+  local url="$3"
+  local label="$4"
+  local tmp="${dest}.part"
+  local size=0
+
+  if [ -f "$dest" ]; then
+    size="$(stat -c%s "$dest" 2>/dev/null || echo 0)"
+  fi
   if [ "$size" -ge "$min_bytes" ]; then
     echo "[5/6] ${label} 已缓存 ($(du -h "$dest" | awk '{print $1}'))"
     return 0
   fi
 
-  echo "[5/6] 准备 ${label}；支持断点续传"
+  echo "[5/6] 下载 ${label}（后台下载，完成后原子替换）"
+  rm -f "$tmp"
+
   if command -v curl >/dev/null 2>&1; then
-    if [ -f "$tmp" ]; then
-      echo "[5/6] 发现未完成文件 $(du -h "$tmp" | awk '{print $1}')，继续下载"
-      if ! curl -fL --retry 10 --retry-delay 2 --connect-timeout 20 -C - -o "$tmp" "$url"; then
-        echo "[5/6] 服务器不支持续传或续传失败，重新下载 ${label}"
-        rm -f "$tmp"
-        curl -fL --retry 10 --retry-delay 2 --connect-timeout 20 -o "$tmp" "$url"
-      fi
-    else
-      curl -fL --retry 10 --retry-delay 2 --connect-timeout 20 -o "$tmp" "$url"
-    fi
+    curl -fL --retry 10 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o "$tmp" "$url"
   elif command -v wget >/dev/null 2>&1; then
-    wget -c --tries=10 --timeout=20 -O "$tmp" "$url"
+    wget --tries=10 --timeout=20 -O "$tmp" "$url"
   else
     echo "[ERROR] 缺少 curl/wget"
     return 1
@@ -110,16 +114,18 @@ download_resumable() {
 
   size="$(stat -c%s "$tmp" 2>/dev/null || echo 0)"
   if [ "$size" -lt "$min_bytes" ]; then
-    echo "[ERROR] ${label} 下载不完整：${size} bytes；保留 .part 供下次续传"
+    echo "[ERROR] ${label} 下载不完整：${size} bytes"
+    rm -f "$tmp"
     return 1
   fi
-  mv "$tmp" "$dest"
+
+  mv -f "$tmp" "$dest"
   echo "[5/6] ${label} 完成 ($(du -h "$dest" | awk '{print $1}'))"
 }
 
-download_resumable "$MODEL_FILE" 100000000 "$MODEL_URL" "Kokoro v1.1-zh INT8 模型"
-download_resumable "$VOICES_FILE" 50000000 "$VOICES_URL" "103 音色包"
-download_resumable "$CONFIG_FILE" 1000 "$CONFIG_URL" "模型配置"
+download_atomic "$MODEL_FILE" 100000000 "$MODEL_URL" "Kokoro v1.1-zh INT8 模型"
+download_atomic "$VOICES_FILE" 53000000 "$VOICES_URL" "103 音色包"
+download_atomic "$CONFIG_FILE" 1000 "$CONFIG_URL" "模型配置"
 
 if [ ! -f .env ]; then
   ADMIN_KEY="admin-p5-$($PYTHON_BIN -c 'import secrets; print(secrets.token_urlsafe(32))')"
