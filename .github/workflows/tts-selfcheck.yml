@@ -1,0 +1,103 @@
+name: Project5 TTS Selfcheck
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Python syntax
+        run: python -m compileall -q app
+
+      - name: Shell syntax
+        run: |
+          bash -n scripts/auto-deploy.sh
+          bash -n scripts/repair-runtime-assets.sh
+          bash -n scripts/bootstrap-runtime.sh
+          bash -n scripts/start.sh
+          bash -n scripts/stop.sh
+          bash -n scripts/restart.sh
+
+      - name: JavaScript syntax
+        run: |
+          node --check app/static/runtime-overlay.js
+          node --check app/static/engine-overlay.js
+          node --check app/static/task-v2.js
+
+      - name: Mixed Chinese English G2P
+        run: |
+          python - <<'PY'
+          import re
+          from types import SimpleNamespace
+          from misaki.espeak import EspeakFallback
+          from misaki.zh import ZHG2P
+
+          def normalize(text: str) -> str:
+              text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
+              text = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', text)
+              text = re.sub(
+                  r'\b(?:AI|API|LLM|MCP|GPT|TTS|OCR|CPU|GPU|HTTP|HTTPS|URL|SQL|RAG|SDK|CLI|JSON|HTML|CSS)\b',
+                  lambda m: ' '.join(m.group(0)), text, flags=re.IGNORECASE,
+              )
+              text = re.sub(r'\b[A-Z]{2,6}\b', lambda m: ' '.join(m.group(0)), text)
+              return re.sub(r'\s+', ' ', text).strip()
+
+          fallback = EspeakFallback(british=False, version='1.1')
+          def english(text: str) -> str:
+              phonemes, _ = fallback(SimpleNamespace(text=normalize(text)))
+              return phonemes or ''
+
+          g2p = ZHG2P(version='1.1', en_callable=english)
+          text = '今天学习 LangChain、RAG、Agent、MCP、LLM 和 API。'
+          phonemes, _ = g2p(text)
+          assert phonemes and phonemes.strip(), phonemes
+          assert '❓' not in phonemes, phonemes
+          print('mixed-g2p-ok:', phonemes)
+          PY
+
+      - name: Edge TTS real online generation
+        run: |
+          python - <<'PY'
+          import time
+          from pathlib import Path
+          import edge_tts
+          from mutagen.mp3 import MP3
+
+          target = Path('/tmp/project5-edge-selfcheck.mp3')
+          last = None
+          for attempt in range(1, 4):
+              try:
+                  target.unlink(missing_ok=True)
+                  edge_tts.Communicate(
+                      '你好，这是 Project5 Edge TTS API test。',
+                      'zh-CN-XiaoxiaoNeural',
+                  ).save_sync(str(target))
+                  assert target.stat().st_size > 512
+                  duration = MP3(str(target)).info.length
+                  assert duration > 0
+                  print(f'edge-real-generation-ok bytes={target.stat().st_size} duration={duration:.2f}s')
+                  break
+              except Exception as exc:
+                  last = exc
+                  if attempt == 3:
+                      raise
+                  time.sleep(attempt * 2)
+          PY
