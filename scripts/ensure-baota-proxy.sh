@@ -49,11 +49,26 @@ TXN_DIR="$BACKUP_DIR/${STAMP}-$$"
 MANIFEST="$TXN_DIR/manifest.tsv"
 mkdir -p "$TXN_DIR"
 
+restore_transaction() {
+  [ -s "$MANIFEST" ] || return 0
+  while IFS=$'\t' read -r original backup; do
+    [ -n "$original" ] || continue
+    [ -f "$backup" ] || continue
+    cp -a "$backup" "$original"
+  done < "$MANIFEST"
+}
+
+# Important: run the editor with set +e so a parser/ambiguity error can restore
+# every file already touched in this transaction. Earlier revisions could exit at
+# Python failure before rollback code was reached.
+set +e
 PROJECT5_NGINX_CONF="$CANDIDATE" \
 PROJECT5_PUBLIC_PORT="$PUBLIC_PORT" \
 PROJECT5_UPSTREAM_PORT="$UPSTREAM_PORT" \
+PROJECT5_NGINX_VHOST_DIR="$VHOST_DIR" \
 PROJECT5_NGINX_TXN_DIR="$TXN_DIR" \
 PROJECT5_NGINX_MANIFEST="$MANIFEST" \
+PROJECT5_PUBLIC_HOST_FILE="$PROJECT_DIR/logs/project5-public-host" \
 python3 - <<'PY'
 from __future__ import annotations
 
@@ -66,13 +81,11 @@ from pathlib import Path
 main = Path(os.environ["PROJECT5_NGINX_CONF"]).resolve()
 public_port = os.environ["PROJECT5_PUBLIC_PORT"]
 upstream_port = os.environ["PROJECT5_UPSTREAM_PORT"]
+vhost_dir = Path(os.environ["PROJECT5_NGINX_VHOST_DIR"]).resolve()
 txn_dir = Path(os.environ["PROJECT5_NGINX_TXN_DIR"]).resolve()
 manifest = Path(os.environ["PROJECT5_NGINX_MANIFEST"]).resolve()
+host_file = Path(os.environ["PROJECT5_PUBLIC_HOST_FILE"]).resolve()
 
-# Keep the Project5 markers INSIDE the existing root location. Earlier revisions
-# could find a marker inside an already-valid `location / { ... }` block and then
-# replace only the marker region with a SECOND full `location /` block. That is the
-# exact shape that produces: nginx: [emerg] duplicate location "/".
 proxy_block = f'''    location / {{
         # PROJECT5-AUTO-PROXY-START
         proxy_pass http://127.0.0.1:{upstream_port};
@@ -93,19 +106,16 @@ server_re = re.compile(r"(?m)^[ \t]*server\s*\{")
 root_location_re = re.compile(r"(?m)^[ \t]*location[ \t]+(?:\^~[ \t]+)?/[ \t]*\{")
 include_re = re.compile(r"(?m)^[ \t]*include[ \t]+([^;\n]+);")
 listen_re = re.compile(rf"(?m)^[ \t]*listen[ \t]+(?:[^;\n]*:)?{re.escape(public_port)}(?:[ \t;]|$)")
+server_name_re = re.compile(r"(?m)^[ \t]*server_name[ \t]+([^;\n]+);")
 
 
 def block_end(text: str, open_index: int) -> int:
     depth = 0
-    in_single = False
-    in_double = False
-    escaped = False
-    in_comment = False
+    in_single = in_double = escaped = in_comment = False
     for i in range(open_index, len(text)):
         ch = text[i]
         if in_comment:
-            if ch == "\n":
-                in_comment = False
+            if ch == "\n": in_comment = False
             continue
         if escaped:
             escaped = False
@@ -124,37 +134,31 @@ def block_end(text: str, open_index: int) -> int:
             continue
         if in_single or in_double:
             continue
-        if ch == "{":
-            depth += 1
+        if ch == "{": depth += 1
         elif ch == "}":
             depth -= 1
-            if depth == 0:
-                return i + 1
+            if depth == 0: return i + 1
     raise RuntimeError("unbalanced nginx braces")
 
 
 def blocks(text: str, regex: re.Pattern[str]) -> list[tuple[int, int]]:
-    result = []
+    out = []
     for m in regex.finditer(text):
-        open_index = text.find("{", m.start(), m.end())
-        if open_index < 0:
-            continue
-        result.append((m.start(), block_end(text, open_index)))
-    return result
-
-
-def find_target_server(text: str) -> tuple[int, int]:
-    found = []
-    for start, end in blocks(text, server_re):
-        if listen_re.search(text[start:end]):
-            found.append((start, end))
-    if len(found) != 1:
-        raise SystemExit(f"target server count for port {public_port}: {len(found)}")
-    return found[0]
+        oi = text.find("{", m.start(), m.end())
+        if oi >= 0:
+            out.append((m.start(), block_end(text, oi)))
+    return out
 
 
 def root_blocks(text: str) -> list[tuple[int, int]]:
     return blocks(text, root_location_re)
+
+
+def find_target_server(text: str) -> tuple[int, int]:
+    found = [(s, e) for s, e in blocks(text, server_re) if listen_re.search(text[s:e])]
+    if len(found) != 1:
+        raise RuntimeError(f"target server count for port {public_port}: {len(found)}")
+    return found[0]
 
 
 def resolve_include(raw: str, parent: Path) -> list[Path]:
@@ -168,7 +172,7 @@ def resolve_include(raw: str, parent: Path) -> list[Path]:
 
 
 def direct_includes(text: str, parent: Path) -> list[Path]:
-    out = []
+    out: list[Path] = []
     for m in include_re.finditer(text):
         out.extend(resolve_include(m.group(1), parent))
     return out
@@ -178,7 +182,7 @@ def recursive_includes(seed: list[Path]) -> list[Path]:
     queue = list(seed)
     seen: set[Path] = set()
     out: list[Path] = []
-    while queue and len(seen) < 120:
+    while queue and len(seen) < 150:
         path = queue.pop(0)
         if path in seen or not path.is_file():
             continue
@@ -191,70 +195,110 @@ def recursive_includes(seed: list[Path]) -> list[Path]:
     return out
 
 
-def write_with_backup(path: Path, new_text: str) -> None:
-    old_text = path.read_text(encoding="utf-8")
-    if old_text == new_text:
+def backup_and_write(path: Path, new_text: str) -> None:
+    old = path.read_text(encoding="utf-8")
+    if old == new_text:
         return
     backup = txn_dir / f"{len(list(txn_dir.glob('*.bak'))):03d}-{path.name}.bak"
     shutil.copy2(path, backup)
     with manifest.open("a", encoding="utf-8") as fh:
         fh.write(f"{path}\t{backup}\n")
     path.write_text(new_text, encoding="utf-8")
-    print(f"[Project5][PROXY] 原位改写已有 location /：{path}")
+    print(f"[Project5][PROXY] 修改：{path}")
+
+
+def replace_spans(text: str, spans: list[tuple[int, int]], first_replacement: str | None) -> str:
+    if not spans:
+        return text
+    result = text
+    for idx in range(len(spans) - 1, -1, -1):
+        a, b = spans[idx]
+        replacement = first_replacement if idx == 0 else "\n    # PROJECT5 removed duplicate root location\n"
+        result = result[:a] + (replacement or "") + result[b:]
+    return result
+
+
+def safe_site_include(path: Path) -> bool:
+    try:
+        path.relative_to(vhost_dir)
+    except ValueError:
+        return False
+    p = str(path).replace("\\", "/")
+    # BaoTa site-specific reverse-proxy/extension files live under these folders.
+    return "/proxy/" in p or "/extension/" in p or main.stem in p
 
 
 main_text = main.read_text(encoding="utf-8")
-server_start, server_end = find_target_server(main_text)
-server_text = main_text[server_start:server_end]
+ss, se = find_target_server(main_text)
+server_text = main_text[ss:se]
 
-# IMPORTANT: always replace an EXISTING `location /` block as a whole. Do not
-# special-case Project5 markers before locating the root block; markers may live
-# inside that root block on existing BaoTa sites.
-direct_roots = root_blocks(server_text)
-if len(direct_roots) == 1:
-    a, b = direct_roots[0]
-    write_with_backup(main, main_text[:server_start + a] + proxy_block + main_text[server_start + b:])
-    raise SystemExit(0)
-if len(direct_roots) > 1:
-    raise SystemExit(f"ambiguous direct location / count: {len(direct_roots)}")
+# Remember the actual virtual-host name so the deploy verifier can send the same
+# Host header as a real browser. Curling 127.0.0.1 without it can hit another
+# default vhost and falsely report deployment failure even when the proxy is good.
+m = server_name_re.search(server_text)
+public_host = "127.0.0.1"
+if m:
+    names = [x for x in m.group(1).split() if x not in {"_", "localhost"}]
+    if names:
+        public_host = names[0]
+host_file.parent.mkdir(parents=True, exist_ok=True)
+host_file.write_text(public_host + "\n", encoding="utf-8")
+print(f"[Project5][PROXY] 公网 Host 验证值：{public_host}")
 
-# BaoTa reverse-proxy sites often put location / in an included proxy/*.conf file.
-# Follow includes from THIS server block and modify that existing root location in
-# place instead of inserting a second root location into the top-level vhost.
 included = recursive_includes(direct_includes(server_text, main))
-roots = []
+included_roots: list[tuple[Path, list[tuple[int, int]], str]] = []
 for path in included:
     try:
-        text = path.read_text(encoding="utf-8")
+        txt = path.read_text(encoding="utf-8")
     except OSError:
         continue
-    for a, b in root_blocks(text):
-        roots.append((path, a, b, text))
+    roots = root_blocks(txt)
+    if roots:
+        included_roots.append((path, roots, txt))
 
-if len(roots) == 1:
-    path, a, b, text = roots[0]
-    write_with_backup(path, text[:a] + proxy_block + text[b:])
-    raise SystemExit(0)
-if len(roots) > 1:
-    sources = ", ".join(str(x[0]) for x in roots[:8])
-    raise SystemExit(f"ambiguous included location / count: {len(roots)} sources={sources}")
+# Validate safety before touching anything. A root location from a shared/global
+# include is not auto-edited; that would risk another site.
+unsafe = [str(path) for path, _, _ in included_roots if not safe_site_include(path)]
+if unsafe:
+    raise RuntimeError("root location found in shared include; refusing unsafe edit: " + ", ".join(unsafe[:6]))
 
-# No direct or included location / exists. Only now is it safe to insert one.
-closing = server_text.rfind("}")
-if closing < 0:
-    raise SystemExit("target server closing brace not found")
-new_server = server_text[:closing] + "\n" + proxy_block + server_text[closing:]
-write_with_backup(main, main_text[:server_start] + new_server + main_text[server_end:])
+direct = root_blocks(server_text)
+print(f"[Project5][PROXY] 根 location 现状：主配置={len(direct)}，站点 include={sum(len(r) for _, r, _ in included_roots)}")
+
+if direct:
+    # Canonical root lives in the main vhost. Replace the first root, remove any
+    # duplicate direct roots, and remove site-local included root blocks.
+    new_server = replace_spans(server_text, direct, proxy_block)
+    backup_and_write(main, main_text[:ss] + new_server + main_text[se:])
+    for path, roots, txt in included_roots:
+        backup_and_write(path, replace_spans(txt, roots, None))
+else:
+    total_included = sum(len(r) for _, r, _ in included_roots)
+    if total_included:
+        # Keep one site-local included root as the canonical root and delete any
+        # extras. Prefer a BaoTa proxy include because that is its intended home.
+        included_roots.sort(key=lambda item: ("/proxy/" not in str(item[0]).replace("\\", "/"), str(item[0])))
+        first_path, first_roots, first_txt = included_roots[0]
+        backup_and_write(first_path, replace_spans(first_txt, first_roots, proxy_block))
+        for path, roots, txt in included_roots[1:]:
+            backup_and_write(path, replace_spans(txt, roots, None))
+    else:
+        # No root location anywhere: insert exactly one before the target server's
+        # closing brace.
+        closing = server_text.rfind("}")
+        if closing < 0:
+            raise RuntimeError("target server closing brace not found")
+        new_server = server_text[:closing] + "\n" + proxy_block + server_text[closing:]
+        backup_and_write(main, main_text[:ss] + new_server + main_text[se:])
 PY
+PY_RC=$?
+set -e
 
-restore_transaction() {
-  [ -s "$MANIFEST" ] || return 0
-  while IFS=$'\t' read -r original backup; do
-    [ -n "$original" ] || continue
-    [ -f "$backup" ] || continue
-    cp -a "$backup" "$original"
-  done < "$MANIFEST"
-}
+if [ "$PY_RC" -ne 0 ]; then
+  echo "[Project5][PROXY][ERROR] 配置分析/修改失败 rc=${PY_RC}，恢复本次修改"
+  restore_transaction
+  exit 6
+fi
 
 NGINX_BIN=""
 for candidate in /www/server/nginx/sbin/nginx nginx; do
