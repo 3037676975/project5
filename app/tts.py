@@ -40,6 +40,16 @@ TECH_ALIASES = {
     "LangGraph": "Lang Graph",
 }
 
+# English runs are separated from CJK/punctuation so we can use the full English
+# frontend but control the *boundary* ourselves. Misaki ZHG2P currently joins every
+# language run with a literal space; that can sound like a tiny hesitation whenever
+# speech switches between Chinese and English. We keep real punctuation, but avoid
+# inventing an extra pause at a plain language boundary.
+ENGLISH_RUN_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9'._+\-/]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9'._+\-/]*)*)|([^A-Za-z]+)"
+)
+NATURAL_BREAK_CHARS = set("，。！？；：、,.!?;:\n")
+
 
 def voice_meta(voice: str) -> dict:
     return {
@@ -73,6 +83,10 @@ def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
 
 
+def _has_natural_break(text: str) -> bool:
+    return any(ch in NATURAL_BREAK_CHARS for ch in text)
+
+
 class KokoroEngine:
     """Kokoro v1.1-zh FP32 CPU engine with a real bilingual G2P frontend."""
 
@@ -85,7 +99,7 @@ class KokoroEngine:
         self.loading = False
         self.load_error: str | None = None
         self.device = "cpu"
-        self.backend = "onnx-fp32-upstream-bilingual"
+        self.backend = "onnx-fp32-upstream-bilingual-smooth"
         self.english_frontend = "not-loaded"
         cpu_count = available_cpu_count()
         requested_threads = int(os.getenv("KOKORO_THREADS", str(min(8, cpu_count))))
@@ -99,9 +113,8 @@ class KokoroEngine:
 
         self.en_fallback = EspeakFallback(british=False, version="1.1")
         try:
-            # This is the same English frontend family used by Hexgrad's Kokoro
-            # pipeline. trf=False uses the small spaCy tagger; EspeakFallback is
-            # only used for words missing from Misaki's English lexicon.
+            # Same English frontend family as Hexgrad Kokoro. The small spaCy
+            # model handles token/POS context; eSpeak is only an OOV fallback.
             from misaki import en
 
             self.en_g2p = en.G2P(
@@ -114,8 +127,6 @@ class KokoroEngine:
             self.english_frontend = "misaki-en-g2p+espeak-fallback"
             print("[Project5] Official Misaki English G2P enabled", flush=True)
         except Exception as exc:
-            # Base deployment remains usable while the lightweight English
-            # enhancement dependencies are being prepared in the background.
             self.en_g2p = None
             self.english_frontend = "espeak-fallback"
             print(
@@ -162,9 +173,8 @@ class KokoroEngine:
                 from misaki.zh import ZHG2P
 
                 self._build_english_frontend()
-                # unk='' is deliberate. Hexgrad's English pipeline also uses an
-                # empty unknown token; unsupported punctuation is ignored instead
-                # of injecting ❓ and aborting an otherwise valid sentence.
+                # Keep ZHG2P for the Mandarin frontend, but Project5 now owns the
+                # mixed-language boundary joining (see _phonemize_mixed_smooth).
                 self.g2p = ZHG2P(version="1.1", unk="", en_callable=self._english_callable)
                 self.model = Kokoro(
                     str(MODEL_PATH),
@@ -180,6 +190,7 @@ class KokoroEngine:
                     "mixed_zh_en": True,
                     "english_frontend": self.english_frontend,
                     "pure_english_direct": self.en_g2p is not None,
+                    "mixed_boundary": "soft-join-v1",
                 }
                 print(
                     f"[Project5] Kokoro bilingual ready in {elapsed:.2f}s frontend={self.english_frontend}",
@@ -228,18 +239,70 @@ class KokoroEngine:
         if current.strip():
             yield current.strip()
 
+    def _phonemize_mixed_smooth(self, text: str) -> str:
+        """Phonemize alternating Chinese/English without an artificial gap.
+
+        ZHG2P currently joins every CJK/English run with ``' '.join(...)``.
+        A space is useful after real punctuation, but it can sound like a tiny
+        hesitation for natural code-switching such as ``我用 ChatGPT 做项目``.
+        We preserve punctuation-produced prosody and otherwise concatenate the
+        two phoneme runs directly so the acoustic model sees one continuous line.
+        """
+        if self.g2p is None:
+            raise RuntimeError("Chinese-English G2P is not loaded")
+
+        pieces: list[tuple[str, str, str]] = []
+        for english, other in ENGLISH_RUN_RE.findall(text):
+            source = english or other
+            if not source or not source.strip():
+                continue
+            if english:
+                phonemes = self._english_callable(english)
+                kind = "en"
+            else:
+                # There are no Latin letters in this run, so the Mandarin
+                # frontend can safely process CJK, numbers and punctuation.
+                phonemes, _ = self.g2p(other, en_callable=lambda _: "")
+                kind = "zh"
+            phonemes = (phonemes or "").strip()
+            if phonemes:
+                pieces.append((kind, source, phonemes))
+
+        if not pieces:
+            return ""
+
+        output = pieces[0][2]
+        previous_kind, previous_source, _ = pieces[0]
+        for kind, source, phonemes in pieces[1:]:
+            # Only source punctuation creates a pause. A bare zh<->en switch gets
+            # a zero-gap phoneme join, avoiding the little "卡一下" feeling.
+            boundary_has_punctuation = _has_natural_break(previous_source[-2:]) or _has_natural_break(source[:2])
+            if boundary_has_punctuation:
+                output = output.rstrip() + " " + phonemes.lstrip()
+            elif kind != previous_kind:
+                output = output.rstrip() + phonemes.lstrip()
+            else:
+                output = output.rstrip() + " " + phonemes.lstrip()
+            previous_kind, previous_source = kind, source
+        return output.strip()
+
     @lru_cache(maxsize=512)
     def _phonemize_cached(self, text: str) -> str:
         if self.g2p is None:
             raise RuntimeError("Chinese-English G2P is not loaded")
         normalized = _normalize_text(text)
-        # Pure English should never travel through ZHG2P's brittle interleaving
-        # regex. Give the whole sentence to the real English G2P so grammar/POS
-        # context and pronunciation remain continuous.
-        if not _contains_cjk(normalized) and re.search(r"[A-Za-z]", normalized):
+        has_english = bool(re.search(r"[A-Za-z]", normalized))
+        has_cjk = _contains_cjk(normalized)
+
+        if has_english and not has_cjk:
+            # Pure English bypasses ZHG2P entirely, keeping the whole sentence in
+            # the English frontend for better grammar/POS context and continuity.
             phonemes = self._english_callable(normalized)
+        elif has_english and has_cjk:
+            phonemes = self._phonemize_mixed_smooth(normalized)
         else:
             phonemes, _ = self.g2p(normalized)
+
         if not phonemes or not phonemes.strip():
             raise RuntimeError("Chinese-English G2P returned empty phonemes")
         if "❓" in phonemes:
@@ -285,7 +348,9 @@ class KokoroEngine:
             if not audio.size:
                 continue
             if index and audio_parts:
-                audio_parts.append(np.zeros(int(sample_rate * 0.10), dtype=np.float32))
+                # Long texts can still require model-sized chunks. Keep only a
+                # tiny natural gap instead of the old 100ms inserted silence.
+                audio_parts.append(np.zeros(int(sample_rate * 0.045), dtype=np.float32))
             audio_parts.append(audio)
 
         if not audio_parts:
@@ -314,6 +379,7 @@ class KokoroEngine:
             "backend": self.backend,
             "mixed_zh_en": True,
             "english_frontend": self.english_frontend,
+            "mixed_boundary": "soft-join-v1",
         }
         print(
             "[Project5][TTS] "
