@@ -6,6 +6,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,13 +48,22 @@ def available_cpu_count() -> int:
         return max(1, os.cpu_count() or 1)
 
 
-class KokoroEngine:
-    """Upstream-compatible Kokoro v1.1-zh FP32 CPU engine.
+def _normalize_technical_english(text: str) -> str:
+    """Normalize English spans for Chinese technology/podcast narration."""
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
+    text = re.sub(
+        r"\b(?:AI|API|LLM|MCP|GPT|TTS|OCR|CPU|GPU|HTTP|HTTPS|URL|SQL|RAG|SDK|CLI|JSON|HTML|CSS)\b",
+        lambda m: " ".join(m.group(0)),
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\b[A-Z]{2,6}\b", lambda m: " ".join(m.group(0)), text)
+    return re.sub(r"\s+", " ", text).strip()
 
-    Stability first: instantiate Kokoro exactly like the upstream Chinese example.
-    ONNX Runtime's CPU provider owns its normal internal thread pool. Project5 keeps
-    one model instance in one Uvicorn worker so the model is not duplicated in RAM.
-    """
+
+class KokoroEngine:
+    """Kokoro v1.1-zh FP32 CPU engine with native Chinese-English G2P."""
 
     def __init__(self) -> None:
         self.model = None
@@ -62,7 +72,7 @@ class KokoroEngine:
         self.loading = False
         self.load_error: str | None = None
         self.device = "cpu"
-        self.backend = "onnx-fp32-upstream"
+        self.backend = "onnx-fp32-upstream-mixed-zh-en"
         cpu_count = available_cpu_count()
         requested_threads = int(os.getenv("KOKORO_THREADS", str(min(8, cpu_count))))
         self.threads = max(1, min(requested_threads, cpu_count))
@@ -87,16 +97,26 @@ class KokoroEngine:
                         "Kokoro ONNX files are missing: " + ", ".join(missing) + ". Run scripts/auto-deploy.sh."
                     )
 
-                # Keep common CPU math libraries aware of the server budget. Kokoro's
-                # own normal constructor creates the ONNX Runtime session, matching the
-                # upstream Chinese example instead of Project5 maintaining a custom graph loader.
                 os.environ["OMP_NUM_THREADS"] = str(self.threads)
                 os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
 
                 from kokoro_onnx import Kokoro
+                from misaki.espeak import EspeakFallback
                 from misaki.zh import ZHG2P
 
-                self.g2p = ZHG2P(version="1.1")
+                english_fallback = EspeakFallback(british=False, version="1.1")
+
+                def english_callable(text: str) -> str:
+                    normalized = _normalize_technical_english(text)
+                    if not normalized:
+                        return ""
+                    phonemes, _ = english_fallback(SimpleNamespace(text=normalized))
+                    return phonemes or ""
+
+                # Important: en_callable is installed here, in the primary engine.
+                # Therefore every Kokoro code path supports Chinese + English, not just
+                # the dual-engine wrapper.
+                self.g2p = ZHG2P(version="1.1", en_callable=english_callable)
                 self.model = Kokoro(
                     str(MODEL_PATH),
                     str(VOICES_PATH),
@@ -108,8 +128,10 @@ class KokoroEngine:
                     "backend": self.backend,
                     "threads": self.threads,
                     "total_ms": round(elapsed * 1000),
+                    "mixed_zh_en": True,
+                    "english_frontend": "misaki-espeak-fallback",
                 }
-                print(f"[Project5] Kokoro FP32 ready in {elapsed:.2f}s", flush=True)
+                print(f"[Project5] Kokoro FP32 mixed zh-en ready in {elapsed:.2f}s", flush=True)
             except Exception as exc:
                 self.load_error = f"{type(exc).__name__}: {exc}"
                 self.loaded = False
@@ -156,10 +178,12 @@ class KokoroEngine:
     @lru_cache(maxsize=512)
     def _phonemize_cached(self, text: str) -> str:
         if self.g2p is None:
-            raise RuntimeError("Chinese G2P is not loaded")
+            raise RuntimeError("Chinese-English G2P is not loaded")
         phonemes, _ = self.g2p(text)
         if not phonemes or not phonemes.strip():
-            raise RuntimeError("Chinese G2P returned empty phonemes")
+            raise RuntimeError("Chinese-English G2P returned empty phonemes")
+        if "❓" in phonemes:
+            raise RuntimeError("Chinese-English G2P produced unknown phonemes")
         return phonemes
 
     def generate(self, text: str, voice: str, speed: float, output_path: Path) -> float:
@@ -229,6 +253,7 @@ class KokoroEngine:
             "audio_seconds": round(duration, 3),
             "rtf": round(rtf, 3),
             "backend": self.backend,
+            "mixed_zh_en": True,
         }
         print(
             "[Project5][TTS] "
