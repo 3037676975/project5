@@ -1,0 +1,61 @@
+name: Project5 BaoTa Routing Selfcheck
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  routing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          bash -n scripts/auto-deploy.sh
+          bash -n scripts/ensure-baota-proxy.sh
+          bash -n scripts/start.sh
+          bash -n scripts/stop.sh
+          bash -n scripts/restart.sh
+
+      - name: Simulate BaoTa vhost proxy repair
+        run: |
+          TMP="$(mktemp -d)"
+          mkdir -p "$TMP/vhost" "$TMP/bin"
+          cat > "$TMP/vhost/project5.conf" <<'EOF'
+          server {
+              listen 28442;
+              server_name 127.0.0.1;
+              root /www/wwwroot/project5;
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+          EOF
+          cat > "$TMP/bin/nginx" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          chmod +x "$TMP/bin/nginx"
+          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
+          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
+          grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf"
+          ! grep -q 'try_files' "$TMP/vhost/project5.conf"
+
+      - name: Chinese API learning docs
+        run: |
+          grep -q 'API 到底是什么' API_DOCS.md
+          grep -q '202 Accepted' API_DOCS.md
+          grep -q 'GET /v1/tasks/{id}' API_DOCS.md
+          grep -q 'Python 调用完整示例' API_DOCS.md
+          grep -q 'API 中文入门' app/static/api-guide-zh.html
+          grep -q 'API Key = 通行证' app/static/api-guide-zh.html
+
+      - name: Deploy verifies public route
+        run: |
+          grep -q 'ensure-baota-proxy.sh' scripts/auto-deploy.sh
+          grep -q 'PROJECT5_PUBLIC_PORT' scripts/auto-deploy.sh
+          grep -q 'public_is_current' scripts/auto-deploy.sh
+          grep -q '宝塔/Nginx' scripts/auto-deploy.sh
