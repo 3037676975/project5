@@ -1,237 +1,230 @@
-# Project5 API 中文入门与调用文档
+# Project5 API 中文小白教程
 
-> 如果你的目的不是自己学习，而是要把 Project5 接给另一个 AI / Agent / 代码助手，请直接复制仓库根目录的 **`AI_API_CONTEXT.md`** 给它。那份文件只保留接口、参数、异步任务流程和接入约束，不重复本教程内容。
-
-这份文档不是只告诉你“复制一段代码”，而是从 **API 是什么** 开始，解释 Project5 的 Kokoro / Edge TTS API 到底怎么工作。
+> 这份文档是给第一次接触 API 的人看的。  
+> 如果你不是自己学，而是想让另一个 AI 直接帮你接入，请把仓库根目录的 **`AI_API_CONTEXT.md`** 完整复制给它。
 
 ---
 
-## 1. 先理解：API 到底是什么？
+## 先记住默认推荐设置
 
-你可以把 API 理解成“程序之间说话的窗口”。
+第一次接入 Project5，不需要先研究几十个音色。
 
-比如你以后做一个 AI 视频项目：
+先用这一套：
 
 ```text
-你的 AI 视频程序
-    ↓ 发送一段文字
-Project5 TTS API
-    ↓ 生成语音
+推荐记忆名：ETG1
+引擎：edge
+实际 voice ID：zh-TW-YunJheNeural
+声音：Edge 云哲 · 台湾男声
+推荐语速：1.10
+```
+
+注意：
+
+```text
+ETG1 只是方便记忆的名字。
+真正发给 API 的 voice 参数必须是：
+zh-TW-YunJheNeural
+```
+
+---
+
+# 1. API 到底是什么？
+
+你可以把 API 理解成：
+
+> **两个程序之间办事的窗口。**
+
+例如你以后做一个 AI 视频项目。
+
+视频项目需要一段配音，但是它自己不负责生成声音。
+
+它只需要这样做：
+
+```text
+AI 视频项目
+↓
+把文字交给 Project5
+↓
+Project5 生成语音
+↓
 返回音频地址
-    ↓
-你的程序继续合成视频
+↓
+视频项目继续合成视频
 ```
 
-你不需要让“视频项目”知道 Kokoro 模型怎么加载、Edge TTS 怎么请求、音频怎么保存。
-
-视频项目只需要知道：
-
-1. 我要请求哪个地址（Endpoint）
-2. 我要使用什么请求方法（GET / POST）
-3. 我要带什么参数（JSON）
-4. 我要怎么证明自己有权限（API Key）
-5. 服务器会返回什么（Response）
-
-这就是 API 的核心。
-
----
-
-## 2. 一个 HTTP API 请求由什么组成？
-
-以 Project5 为例：
-
-```http
-POST /v1/audio/speech
-Authorization: Bearer YOUR_API_KEY
-Content-Type: application/json
-
-{
-  "input": "你好，today we test ChatGPT，然后继续中文。",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "speed": 1.0
-}
-```
-
-这里分别代表：
-
-| 部分 | 含义 |
-|---|---|
-| `POST` | 我要向服务器提交数据，让它做一件事 |
-| `/v1/audio/speech` | 这个功能的 API 地址 |
-| `Authorization` | 身份认证，证明你有调用权限 |
-| `Bearer YOUR_API_KEY` | 把你创建的 API Key 带过去 |
-| `Content-Type: application/json` | 告诉服务器：我发的是 JSON |
-| `input` | 要朗读的文字 |
-| `engine` | 使用 Kokoro 还是 Edge |
-| `voice` | 使用哪个音色 |
-| `speed` | 语速 |
-
----
-
-## 3. 为什么 Project5 不直接把音频返回，而是返回 task_id？
-
-因为 TTS 生成可能需要几秒、几十秒，长文本甚至更久。
-
-如果 API 一直卡着等待，容易超时。所以 Project5 使用 **异步任务**：
+这样做的好处是：
 
 ```text
-第 1 步：提交生成任务
-POST /v1/audio/speech
-          ↓
-马上返回 HTTP 202 + task_id
-          ↓
-第 2 步：不断查询任务
-GET /v1/tasks/{task_id}
-          ↓
-queued → processing → completed
-          ↓
-第 3 步：completed 后拿 audio_url
+Project5 专门负责 TTS
+视频项目专门负责视频
+知识库项目专门负责知识库
 ```
 
-这也是很多 AI API 常用的设计方式。
-
-### HTTP 202 是什么意思？
-
-`202 Accepted` 的意思不是“已经生成完成”，而是：
-
-> 服务器已经接收你的任务，并准备处理。
+不用每做一个新项目，就重新安装一遍 TTS 模型。
 
 ---
 
-## 4. 创建 API Key
+# 2. 调 API 之前你只需要准备 2 个东西
+
+## 2.1 Project5 地址
+
+以后用：
+
+```text
+PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST
+```
+
+它就是 Project5 的服务器地址。
+
+你可以把它理解成“店铺地址”。
+
+---
+
+## 2.2 API Key
 
 进入 Project5 后台：
 
 ```text
-API 密钥 → 创建密钥
+API 密钥
+→ 创建密钥
+→ 保存完整 Key
 ```
 
-创建以后你会拿到类似：
-
-```text
-sk-kokoro-xxxxxxxxxxxxxxxxxxxx
-```
-
-完整 Key 通常只显示一次，请自己保存。
-
-调用时放在 Header：
+调用 API 时带上：
 
 ```http
-Authorization: Bearer sk-kokoro-xxxxxxxxxxxxxxxxxxxx
+Authorization: Bearer YOUR_API_KEY
 ```
 
-不要把真实 API Key 写到 GitHub 公共仓库或前端网页里。
+API Key 可以理解成“通行证”。
+
+### 安全注意
+
+真实 API Key：
+
+```text
+不要写进公开 GitHub
+不要直接写进浏览器前端
+不要发在公开截图里
+不要完整打印进日志
+```
+
+正式项目应该放在环境变量里：
+
+```text
+PROJECT5_API_KEY=YOUR_API_KEY
+```
 
 ---
 
-# 5. 获取可用音色
+# 3. 小白先认识 6 个词
 
-## Kokoro 音色
-
-```http
-GET /v1/voices?engine=kokoro
-```
-
-会返回 Kokoro 的音色列表，例如：
-
-```json
-{
-  "engine": "kokoro",
-  "voices": [
-    {
-      "id": "zf_001",
-      "label": "中文女声 001",
-      "gender": "female"
-    }
-  ]
-}
-```
-
-你真正调用时需要的是 `id`：
-
-```text
-zf_001
-```
-
-后台“音色库 / 固定试听表”里的 **API ID** 就是这个参数。
-
-## Edge 音色
-
-```http
-GET /v1/voices?engine=edge
-```
+| 名词 | 你可以怎么理解 |
+|---|---|
+| BASE_URL | Project5 的地址 |
+| API Key | 调用权限通行证 |
+| Endpoint | 某个具体功能的窗口 |
+| POST | 向服务器提交一件事情 |
+| JSON | 提交给服务器的一张参数表 |
+| task_id | 任务取件号 |
 
 例如：
 
+```http
+POST /v1/audio/speech
+```
+
+意思就是：
+
 ```text
-zh-CN-XiaoxiaoNeural
-zh-CN-YunxiNeural
-zh-CN-YunyangNeural
+我要向 Project5 提交一个“生成语音”的任务。
 ```
 
 ---
 
-# 6. Kokoro 本地 TTS 调用
+# 4. 第一次调用，直接用默认推荐音色
 
-## 请求
+推荐请求：
 
 ```http
 POST /v1/audio/speech
 Authorization: Bearer YOUR_API_KEY
 Content-Type: application/json
-
-{
-  "input": "今天我们学习 ChatGPT and LangChain，然后继续聊 RAG。",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "speed": 1.0
-}
 ```
 
-字段说明：
-
-| 字段 | 必填 | 说明 |
-|---|---:|---|
-| `input` | 是 | 要生成的文字 |
-| `engine` | 是 | `kokoro` |
-| `voice` | 建议 | Kokoro 音色 ID，例如 `zf_001` |
-| `speed` | 否 | 0.5 ~ 2.0，默认 1.0 |
-
-Kokoro 在你的服务器本地 CPU 推理，输出 WAV。
-
----
-
-# 7. Edge 在线 TTS 调用
-
-```http
-POST /v1/audio/speech
-Authorization: Bearer YOUR_API_KEY
-Content-Type: application/json
-
-{
-  "input": "你好，这是 Edge TTS 的测试。",
-  "engine": "edge",
-  "voice": "zh-CN-XiaoxiaoNeural",
-  "speed": 1.0
-}
-```
-
-Edge 需要服务器能够访问互联网，输出 MP3。
-
----
-
-# 8. 提交任务以后会返回什么？
-
-示例：
+Body：
 
 ```json
 {
-  "id": "tts_20260907_a1b2c3d4e5",
-  "engine": "kokoro",
-  "voice": "zf_001",
+  "input": "你好，这是 Project5 API 的第一次测试。",
+  "engine": "edge",
+  "voice": "zh-TW-YunJheNeural",
+  "speed": 1.10
+}
+```
+
+这几个参数分别是什么意思：
+
+| 参数 | 意思 | 推荐值 |
+|---|---|---|
+| input | 要朗读的文字 | 你自己的文本 |
+| engine | 使用哪个 TTS 引擎 | edge |
+| voice | 使用哪个音色 | zh-TW-YunJheNeural |
+| speed | 语速 | 1.10 |
+
+---
+
+# 5. 为什么 POST 后没有立刻返回 MP3？
+
+这是理解 Project5 API 最重要的一点。
+
+Project5 使用的是：
+
+```text
+异步任务
+```
+
+因为 TTS 可能需要几秒甚至更久。
+
+如果一直让一个 HTTP 请求卡在那里等，很容易超时。
+
+所以流程是：
+
+```text
+POST 提交文字
+↓
+Project5 接收任务
+↓
+马上返回 HTTP 202 + task_id
+↓
+你的程序拿 task_id 查询进度
+↓
+completed
+↓
+拿到 audio_url
+```
+
+---
+
+# 6. HTTP 202 到底是什么意思？
+
+`202 Accepted` 的意思是：
+
+> Project5 已经收到你的任务，准备处理。
+
+它不是：
+
+> 音频已经生成完成。
+
+例如返回：
+
+```json
+{
+  "id": "tts_20260907_xxxxxxxxxx",
   "status": "queued",
-  "task_url": "http://your-server/v1/tasks/tts_20260907_a1b2c3d4e5"
+  "engine": "edge",
+  "voice": "zh-TW-YunJheNeural"
 }
 ```
 
@@ -241,20 +234,22 @@ Edge 需要服务器能够访问互联网，输出 MP3。
 id
 ```
 
-这个就是任务编号。
+这个 id 就是 `task_id`。
+
+你可以把它理解成取件号码。
 
 ---
 
-# 9. 查询任务状态
+# 7. 拿 task_id 查询任务
 
 请求：
 
 ```http
-GET /v1/tasks/tts_20260907_a1b2c3d4e5
+GET /v1/tasks/tts_20260907_xxxxxxxxxx
 Authorization: Bearer YOUR_API_KEY
 ```
 
-状态一般会经历：
+状态通常是：
 
 ```text
 queued
@@ -264,261 +259,390 @@ processing
 completed
 ```
 
-如果出错：
+也可能：
 
 ```text
 failed
 ```
 
-完成时可能返回：
+你的代码应该这样判断：
+
+```text
+queued
+→ 等 1 秒继续查
+
+processing
+→ 等 1 秒继续查
+
+completed
+→ 读取 audio_url
+
+failed
+→ 停止并读取 error
+```
+
+程序一定要有总超时，例如：
+
+```text
+180 秒
+```
+
+不能无限查询。
+
+---
+
+# 8. completed 后真正拿到什么？
+
+示例：
 
 ```json
 {
-  "id": "tts_20260907_a1b2c3d4e5",
+  "id": "tts_20260907_xxxxxxxxxx",
   "status": "completed",
-  "engine": "kokoro",
-  "voice": "zf_001",
-  "duration": 8.42,
-  "audio_url": "http://your-server/audio/tts_20260907_a1b2c3d4e5.wav"
+  "engine": "edge",
+  "voice": "zh-TW-YunJheNeural",
+  "audio_url": "http://YOUR_PROJECT5_HOST/audio/tts_20260907_xxxxxxxxxx.mp3"
 }
 ```
 
-你的程序接下来就可以读取 `audio_url`。
+其中：
+
+```text
+audio_url
+```
+
+就是最终生成出来的音频地址。
+
+你的项目可以：
+
+```text
+播放它
+下载它
+保存它
+交给视频合成程序
+交给播客生成程序
+```
 
 ---
 
-# 10. 用 curl 调用：最适合测试 API
+# 9. 完整调用逻辑
 
-## Kokoro
+把前面所有知识合起来，其实就是：
+
+```text
+1. 准备 BASE_URL
+2. 准备 API Key
+3. POST /v1/audio/speech
+4. 得到 HTTP 202
+5. 保存 id
+6. GET /v1/tasks/{id}
+7. queued / processing → 继续等
+8. completed → 拿 audio_url
+9. failed → 报错
+```
+
+一句话记忆：
+
+```text
+API Key = 通行证
+POST = 下单
+202 = 已接单
+id = 取件号
+GET task = 查进度
+audio_url = 最终成品
+```
+
+---
+
+# 10. curl 第一次测试
+
+Linux / macOS 可以这样测试：
 
 ```bash
-curl -X POST "http://YOUR_HOST/v1/audio/speech" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+curl -X POST "$PROJECT5_BASE_URL/v1/audio/speech" \
+  -H "Authorization: Bearer $PROJECT5_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "input": "你好，today we test ChatGPT，然后继续中文。",
-    "engine": "kokoro",
-    "voice": "zf_001",
-    "speed": 1.0
+    "input": "你好，这是 Project5 API 的第一次测试。",
+    "engine": "edge",
+    "voice": "zh-TW-YunJheNeural",
+    "speed": 1.10
   }'
 ```
 
-查询：
+它会先返回 task_id。
+
+然后再查：
 
 ```bash
-curl "http://YOUR_HOST/v1/tasks/TASK_ID" \
-  -H "Authorization: Bearer YOUR_API_KEY"
+curl \
+  -H "Authorization: Bearer $PROJECT5_API_KEY" \
+  "$PROJECT5_BASE_URL/v1/tasks/你的task_id"
 ```
 
 ---
 
-# 11. Python 调用完整示例
+# 11. Python 完整最小示例
 
 ```python
+import os
 import time
 import requests
 
-BASE_URL = "http://YOUR_HOST"
-API_KEY = "YOUR_API_KEY"
+BASE_URL = os.environ["PROJECT5_BASE_URL"].rstrip("/")
+API_KEY = os.environ["PROJECT5_API_KEY"]
 
-headers = {
+HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
 }
 
-payload = {
-    "input": "今天学习 ChatGPT and LangChain，然后继续中文。",
-    "engine": "kokoro",
-    "voice": "zf_001",
-    "speed": 1.0,
-}
 
-# 1. 提交任务
-r = requests.post(
-    f"{BASE_URL}/v1/audio/speech",
-    headers=headers,
-    json=payload,
-    timeout=30,
-)
-r.raise_for_status()
-task = r.json()
-task_id = task["id"]
-print("任务 ID:", task_id)
-
-# 2. 查询任务
-while True:
-    r = requests.get(
-        f"{BASE_URL}/v1/tasks/{task_id}",
-        headers=headers,
-        timeout=30,
+def submit_tts(
+    text: str,
+    engine="edge",
+    voice="zh-TW-YunJheNeural",
+    speed=1.10,
+):
+    response = requests.post(
+        f"{BASE_URL}/v1/audio/speech",
+        headers={
+            **HEADERS,
+            "Content-Type": "application/json",
+        },
+        json={
+            "input": text,
+            "engine": engine,
+            "voice": voice,
+            "speed": speed,
+        },
+        timeout=15,
     )
-    r.raise_for_status()
-    task = r.json()
-    print("状态:", task["status"])
 
-    if task["status"] == "completed":
-        print("音频:", task["audio_url"])
-        break
+    response.raise_for_status()
+    data = response.json()
 
-    if task["status"] == "failed":
-        raise RuntimeError(task.get("error", "TTS failed"))
+    return data["id"]
 
-    time.sleep(1)
+
+def wait_for_task(task_id: str, timeout_seconds=180):
+    deadline = time.time() + timeout_seconds
+
+    while time.time() < deadline:
+        response = requests.get(
+            f"{BASE_URL}/v1/tasks/{task_id}",
+            headers=HEADERS,
+            timeout=10,
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        if data["status"] == "completed":
+            return data["audio_url"]
+
+        if data["status"] == "failed":
+            raise RuntimeError(data.get("error") or data)
+
+        time.sleep(1)
+
+    raise TimeoutError("Project5 TTS task timeout")
+
+
+task_id = submit_tts(
+    "你好，这是 Project5 API 的第一次测试。"
+)
+
+audio_url = wait_for_task(task_id)
+
+print(audio_url)
 ```
 
-你以后做 AI 视频项目时，核心逻辑其实就是这一段。
+你现在不需要一开始就完全看懂 Python。
+
+先理解：
+
+```text
+submit_tts()
+= 提交任务
+
+wait_for_task()
+= 拿任务编号等待结果
+```
+
+就够了。
 
 ---
 
-# 12. JavaScript 调用思路
+# 12. 获取其他音色
 
-```javascript
-const submit = await fetch('/v1/audio/speech', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer YOUR_API_KEY',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    input: '你好，today we test AI，然后继续中文。',
-    engine: 'kokoro',
-    voice: 'zf_001',
-    speed: 1.0
-  })
-});
+如果默认的云哲台湾男声已经够用，你甚至可以暂时不看这一节。
 
-const task = await submit.json();
-console.log(task.id);
+以后需要换声音，再调用。
+
+## Edge 音色
+
+```http
+GET /v1/voices?engine=edge
 ```
 
-正式项目里不要把私密 API Key 直接写在公开浏览器 JavaScript 中，最好让你自己的后端保存 Key。
+## Kokoro 音色
+
+```http
+GET /v1/voices?engine=kokoro
+```
+
+程序应该使用接口真实返回的 `id`。
+
+不要自己猜 voice ID。
 
 ---
 
-# 13. Project5 的后台 API 与公开 API 有什么区别？
+# 13. Edge 和 Kokoro 有什么区别？
 
-Project5 有两类接口。
+| 引擎 | 工作方式 | 输出 | 什么时候用 |
+|---|---|---|---|
+| Edge | 在线 TTS，需要服务器联网 | MP3 | 默认推荐，快速稳定接入 |
+| Kokoro | 本地 CPU 推理 | WAV | 想本地生成或使用 Kokoro 音色时 |
 
-## 给你的其他项目调用
-
-```text
-POST /v1/audio/speech
-GET  /v1/tasks/{id}
-GET  /v1/voices
-```
-
-认证方式：
+第一次接 API：
 
 ```text
-Authorization: Bearer API_KEY
+先用 Edge 云哲台湾男声 + 1.10
 ```
 
-## 给 Project5 后台管理界面调用
-
-例如：
-
-```text
-GET  /admin/previews
-POST /admin/previews/generate
-POST /admin/previews/generate-batch
-GET  /admin/voice-notes
-PUT  /admin/voice-notes
-GET  /admin/audio-retention
-PUT  /admin/audio-retention
-```
-
-这些属于管理功能，不建议你的普通业务项目直接依赖它们。
+等整个业务流程跑通之后，再考虑换其他声音。
 
 ---
 
-# 14. 固定试听和正式音频不是一回事
+# 14. 常见错误
 
-## 固定音色试听
+## 401 / 403
 
-用途：帮助你比较 103 个 Kokoro 音色，以及 Edge 音色。
-
-```text
-/static/previews/...
-```
-
-特点：
-
-- 手动生成
-- 可以一键生成全部
-- 永久保存
-- 可以给每个音色写备注
-- 不参与 24 小时清理
-
-## 正式生成音频
+通常先检查：
 
 ```text
-/audio/tts_xxx.wav
-/audio/tts_xxx.mp3
+API Key 对不对
+Authorization 有没有 Bearer
+Key 是否已经停用
 ```
-
-可以选择：
-
-```text
-手动清理
-或
-只保留 24 小时
-```
-
-即使音频文件被清理，任务历史仍保留，方便追踪曾经使用的 engine / voice / 时间。
 
 ---
 
-# 15. 常见 HTTP 状态码
+## 400 / Unknown voice
 
-| 状态码 | 含义 |
-|---:|---|
-| `200` | 请求成功 |
-| `202` | 任务已经接收，但还没有生成完成 |
-| `400` | 参数不对，例如音色 ID 错误 |
-| `401` | API Key 不正确或没有登录 |
-| `404` | 任务或音频不存在 |
-| `409` | 当前状态不允许这个操作 |
-| `500` | 服务器内部错误 |
+最常见错误之一。
 
----
+不要写：
 
-# 16. 以后你的 AI 视频项目应该怎么接 Project5？
-
-建议架构：
-
-```text
-文章 / 脚本
-    ↓
-你的 AI 视频后端
-    ↓
-调用 Project5 /v1/audio/speech
-    ↓
-拿 task_id
-    ↓
-轮询 /v1/tasks/{id}
-    ↓
-拿 audio_url
-    ↓
-下载 / 使用音频
-    ↓
-FFmpeg / 视频合成
+```json
+{
+  "voice": "ETG1"
+}
 ```
 
-这样 Project5 就是一个独立的“语音基础服务”。
+应该写：
 
-未来无论你做：
-
-- AI 视频生成
-- 知识播客
-- 自动配音
-- Agent
-- RAG 讲解
-- 批量短视频
-
-都不需要把 Kokoro / Edge 的模型代码重复塞进主项目。
+```json
+{
+  "voice": "zh-TW-YunJheNeural"
+}
+```
 
 ---
 
-# 17. 一句话理解这套 API
+## 一直 queued / processing
 
-Project5 API 的核心就是：**提交文本生成任务 → 拿 task_id → 查询状态 → 拿 audio_url。**
+正常情况下应该继续轮询。
+
+但程序必须有：
+
+```text
+总超时
+```
+
+如果长时间不完成，可以进入后台的“生成任务”检查。
+
+---
+
+## status = failed
+
+不要只告诉用户“失败”。
+
+应该读取：
+
+```text
+error
+```
+
+这样才能知道是网络、音色还是 TTS 服务出错。
+
+---
+
+# 15. audio_url 会永久存在吗？
+
+不一定。
+
+Project5 后台有：
+
+```text
+音频文件保存策略
+```
+
+如果管理员打开：
+
+```text
+24小时自动清理
+```
+
+正式生成的 WAV / MP3 在完成约 24 小时以后可能被清理。
+
+所以业务项目如果需要长期保存：
+
+```text
+生成完成
+↓
+拿到 audio_url
+↓
+及时下载 / 转存到自己的长期存储
+```
+
+固定音色试听属于后台资产，不走这条正式音频清理规则。
+
+---
+
+# 16. 我不会接 API，最省事的方法是什么？
+
+直接打开：
+
+```text
+AI_API_CONTEXT.md
+```
+
+把整份内容复制给 AI。
+
+它里面不仅告诉 AI 接口是什么，还明确要求 AI：
+
+```text
+检查你的项目
+添加环境变量
+写客户端
+默认用云哲台湾男声 1.10
+实现异步轮询
+做错误处理
+实际测试
+最后告诉你改了哪些文件
+```
+
+所以你不需要自己先学会写完整代码，再让 AI 接入。
+
+你只需要先理解这条逻辑：
+
+```text
+文字
+→ POST
+→ task_id
+→ 查询
+→ audio_url
+```
+
+这就是 Project5 API 最核心的调用方法。
