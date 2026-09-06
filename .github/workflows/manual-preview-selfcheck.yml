@@ -38,8 +38,6 @@ jobs:
 
           def fake_generate(engine, text, voice, speed, output_path):
               output_path.parent.mkdir(parents=True, exist_ok=True)
-              # Preview manager validates size, not codec internals. This isolates
-              # the manual workflow from the expensive real model selfcheck.
               payload = (f'{engine}|{voice}|{speed}|{text}'.encode('utf-8') + b'0' * 2048)
               output_path.write_bytes(payload)
               return 1.234
@@ -53,10 +51,8 @@ jobs:
                   r = client.get(f'/admin/previews/jobs/{job_id}', headers=headers)
                   assert r.status_code == 200, r.text
                   job = r.json()
-                  if job['status'] == 'completed':
-                      return job
-                  if job['status'] in {'failed', 'cancelled'}:
-                      raise RuntimeError(job)
+                  if job['status'] == 'completed': return job
+                  if job['status'] in {'failed', 'cancelled'}: raise RuntimeError(job)
                   time.sleep(0.05)
               raise TimeoutError(job_id)
 
@@ -79,6 +75,10 @@ jobs:
               assert saved_note.json()['notes']['kokoro']['zf_001']['note'].startswith('温柔')
               reread_note = client.get('/admin/voice-notes?engine=kokoro', headers=headers).json()
               assert reread_note['notes']['kokoro']['zf_001']['note'] == '温柔，适合播客女声；英文自然'
+
+              version = client.get('/deploy-version')
+              assert version.status_code == 200
+              assert version.json()['ui'] == 'manual-preview-voice-notes-v1'
 
               text1 = '你好，today we test ChatGPT，然后继续聊天。'
               saved = client.put('/admin/previews/text', headers=headers, json={'text': text1})
@@ -122,14 +122,19 @@ jobs:
           print('manual-preview-persistent-flow-ok')
           PY
 
-      - name: No automatic preview or English deploy worker remains
+      - name: Verified deploy and no automatic preview workers
         run: |
           python -m py_compile app/voice_notes.py
           node --check app/static/preview-admin.js
           bash -n scripts/auto-deploy.sh
+          bash -n scripts/start.sh
+          bash -n scripts/stop.sh
+          bash -n scripts/restart.sh
           test ! -e scripts/build-voice-previews.py
           ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
           ! grep -q 'nohup.*setup-kokoro-english.sh' scripts/auto-deploy.sh
-          grep -q 'Webhook 已接收' scripts/auto-deploy.sh
+          grep -q '代码、端口进程、线上 commit 三层一致' scripts/auto-deploy.sh
+          grep -q '/deploy-version' scripts/start.sh
+          grep -q 'fuser -n tcp' scripts/stop.sh
           grep -q 'manual-persistent-v1' app/entry.py
           grep -q '/admin/voice-notes' app/voice_notes.py
