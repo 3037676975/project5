@@ -14,7 +14,7 @@ jobs:
 
       - name: Python syntax
         run: |
-          python -m py_compile app/entry.py app/tts.py app/dual_tts.py scripts/build-voice-previews.py
+          python -m py_compile app/entry.py app/tts.py app/dual_tts.py app/preview_admin.py
 
       - name: Explicit dual-engine console structure
         run: |
@@ -26,14 +26,12 @@ jobs:
           grep -q 'engine=kokoro' app/static/console-v2.html
           grep -q 'engine=edge' app/static/console-v2.html
           grep -q 'progress-ring' app/static/console-v2.html
-          grep -q '固定音色试听' app/static/console-v2.html
           grep -q '一键删除全部音频' app/static/console-v2.html
           grep -q 'deleteAudioBatch' app/static/console-v2.html
-          grep -q 'static/previews/manifest.json' app/static/console-v2.html
-          grep -q 'console-v2.html' app/entry.py
-          grep -q 'dual-engine-v2' app/entry.py
+          grep -q 'preview-admin.js' app/entry.py
+          grep -q 'manual-persistent-v1' app/entry.py
 
-      - name: Inline JavaScript syntax
+      - name: JavaScript syntax
         run: |
           python - <<'PY'
           import re
@@ -44,6 +42,19 @@ jobs:
           Path('/tmp/project5-console-v2.js').write_text('\n'.join(scripts), encoding='utf-8')
           PY
           node --check /tmp/project5-console-v2.js
+          node --check app/static/preview-admin.js
+
+      - name: Manual persistent previews
+        run: |
+          grep -q 'DEFAULT_PREVIEW_TEXT' app/preview_admin.py
+          grep -q '/admin/previews/generate' app/preview_admin.py
+          grep -q '/admin/previews/generate-batch' app/preview_admin.py
+          grep -q 'manual-persistent' app/preview_admin.py
+          grep -q '生成 / 更新当前音色试听' app/static/preview-admin.js
+          grep -q '手动补齐全部音色' app/static/preview-admin.js
+          grep -q '不会再自动后台生成' app/static/preview-admin.js
+          grep -q '固定试听改为手动模式' scripts/setup-kokoro-english.sh
+          ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
 
       - name: Bilingual Kokoro wiring
         run: |
@@ -53,4 +64,3 @@ jobs:
           grep -q 'ENGLISH_RUN_RE' app/tts.py
           grep -q 'SUPPORTED_ENGINES = (KOKORO_ENGINE, EDGE_ENGINE)' app/dual_tts.py
           grep -q 'setup-kokoro-english.sh' scripts/auto-deploy.sh
-          grep -q 'build-voice-previews.py' scripts/setup-kokoro-english.sh
