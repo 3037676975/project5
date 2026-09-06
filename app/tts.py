@@ -93,7 +93,10 @@ class KokoroEngine:
 
                 import onnxruntime as ort
                 from kokoro_onnx import Kokoro
-                from misaki import zh
+                # Import the concrete submodule, not `from misaki import zh`.
+                # misaki-fork can coexist with stale/namespace `misaki` installs,
+                # where the package-level import fails even though misaki.zh exists.
+                from misaki.zh import ZHG2P
 
                 options = ort.SessionOptions()
                 options.intra_op_num_threads = self.threads
@@ -115,7 +118,7 @@ class KokoroEngine:
                 )
                 session_seconds = time.perf_counter() - session_started
 
-                self.g2p = zh.ZHG2P(version="1.1")
+                self.g2p = ZHG2P(version="1.1")
                 self.model = Kokoro.from_session(
                     session,
                     str(VOICES_PATH),
