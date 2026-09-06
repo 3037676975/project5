@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project5 TTS Demo</title>
+  <style>
+    body { margin:0; font-family: Arial,"Microsoft YaHei",sans-serif; background:#f5f7fb; color:#1f2937; }
+    .card { max-width:800px; margin:80px auto; background:#fff; padding:40px; border-radius:20px; box-shadow:0 10px 30px rgba(0,0,0,.08); }
+    h1 { color:#2563eb; }
+    .tag { display:inline-block; padding:8px 14px; background:#eff6ff; color:#2563eb; border-radius:20px; }
+    button { padding:12px 24px; border:0; border-radius:10px; background:#2563eb; color:white; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <span class="tag">Project5</span>
+    <h1>Kokoro-82M-v1.1-zh TTS 测试页面</h1>
+    <p>这是 Project5 初始化测试页面。</p>
+    <p>目标：部署 CPU 推理 TTS 服务，基于 Kokoro 中文模型构建独立 API。</p>
+    <ul>
+      <li>模型：Kokoro-82M-v1.1-zh</li>
+      <li>推理：ONNX Runtime</li>
+      <li>服务：FastAPI + Docker</li>
+    </ul>
+    <button onclick="alert('Project5 HTML 测试成功')">测试按钮</button>
+  </div>
+</body>
+</html>
