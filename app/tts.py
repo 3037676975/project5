@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +33,13 @@ CHINESE_VOICES = [
     "zm_095", "zm_096", "zm_097", "zm_098", "zm_100",
 ]
 
+TECH_ALIASES = {
+    "OpenAI": "Open A I",
+    "ChatGPT": "Chat G P T",
+    "LangChain": "Lang Chain",
+    "LangGraph": "Lang Graph",
+}
+
 
 def voice_meta(voice: str) -> dict:
     return {
@@ -48,37 +56,87 @@ def available_cpu_count() -> int:
         return max(1, os.cpu_count() or 1)
 
 
-def _normalize_technical_english(text: str) -> str:
-    """Normalize English spans for Chinese technology/podcast narration."""
+def _normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+    text = text.replace("’", "'").replace("‘", "'")
+    text = text.replace("—", "-").replace("–", "-")
+    for source, target in TECH_ALIASES.items():
+        text = re.sub(rf"\b{re.escape(source)}\b", target, text, flags=re.IGNORECASE)
+    # Preserve acronyms such as API/RAG/MCP. Misaki's English lexicon knows how
+    # to pronounce all-caps tokens letter-by-letter. Only split CamelCase words.
     text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
     text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
-    text = re.sub(
-        r"\b(?:AI|API|LLM|MCP|GPT|TTS|OCR|CPU|GPU|HTTP|HTTPS|URL|SQL|RAG|SDK|CLI|JSON|HTML|CSS)\b",
-        lambda m: " ".join(m.group(0)),
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\b[A-Z]{2,6}\b", lambda m: " ".join(m.group(0)), text)
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
 
 
 class KokoroEngine:
-    """Kokoro v1.1-zh FP32 CPU engine with native Chinese-English G2P."""
+    """Kokoro v1.1-zh FP32 CPU engine with a real bilingual G2P frontend."""
 
     def __init__(self) -> None:
         self.model = None
         self.g2p = None
+        self.en_g2p = None
+        self.en_fallback = None
         self.loaded = False
         self.loading = False
         self.load_error: str | None = None
         self.device = "cpu"
-        self.backend = "onnx-fp32-upstream-mixed-zh-en"
+        self.backend = "onnx-fp32-upstream-bilingual"
+        self.english_frontend = "not-loaded"
         cpu_count = available_cpu_count()
         requested_threads = int(os.getenv("KOKORO_THREADS", str(min(8, cpu_count))))
         self.threads = max(1, min(requested_threads, cpu_count))
         self.last_metrics: dict = {}
         self.load_metrics: dict = {}
         self._load_lock = threading.Lock()
+
+    def _build_english_frontend(self):
+        from misaki.espeak import EspeakFallback
+
+        self.en_fallback = EspeakFallback(british=False, version="1.1")
+        try:
+            # This is the same English frontend family used by Hexgrad's Kokoro
+            # pipeline. trf=False uses the small spaCy tagger; EspeakFallback is
+            # only used for words missing from Misaki's English lexicon.
+            from misaki import en
+
+            self.en_g2p = en.G2P(
+                version="1.1",
+                trf=False,
+                british=False,
+                fallback=self.en_fallback,
+                unk="",
+            )
+            self.english_frontend = "misaki-en-g2p+espeak-fallback"
+            print("[Project5] Official Misaki English G2P enabled", flush=True)
+        except Exception as exc:
+            # Base deployment remains usable while the lightweight English
+            # enhancement dependencies are being prepared in the background.
+            self.en_g2p = None
+            self.english_frontend = "espeak-fallback"
+            print(
+                f"[Project5] Misaki English G2P not ready; temporary eSpeak fallback: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+    def _english_callable(self, text: str) -> str:
+        normalized = _normalize_text(text)
+        if not normalized:
+            return ""
+        if self.en_g2p is not None:
+            try:
+                phonemes, _ = self.en_g2p(normalized)
+                if phonemes:
+                    return phonemes
+            except Exception as exc:
+                print(f"[Project5] Misaki English G2P fallback for segment: {type(exc).__name__}: {exc}", flush=True)
+        assert self.en_fallback is not None
+        phonemes, _ = self.en_fallback(SimpleNamespace(text=normalized))
+        return phonemes or ""
 
     def load(self) -> None:
         if self.loaded:
@@ -101,22 +159,13 @@ class KokoroEngine:
                 os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
 
                 from kokoro_onnx import Kokoro
-                from misaki.espeak import EspeakFallback
                 from misaki.zh import ZHG2P
 
-                english_fallback = EspeakFallback(british=False, version="1.1")
-
-                def english_callable(text: str) -> str:
-                    normalized = _normalize_technical_english(text)
-                    if not normalized:
-                        return ""
-                    phonemes, _ = english_fallback(SimpleNamespace(text=normalized))
-                    return phonemes or ""
-
-                # Important: en_callable is installed here, in the primary engine.
-                # Therefore every Kokoro code path supports Chinese + English, not just
-                # the dual-engine wrapper.
-                self.g2p = ZHG2P(version="1.1", en_callable=english_callable)
+                self._build_english_frontend()
+                # unk='' is deliberate. Hexgrad's English pipeline also uses an
+                # empty unknown token; unsupported punctuation is ignored instead
+                # of injecting ❓ and aborting an otherwise valid sentence.
+                self.g2p = ZHG2P(version="1.1", unk="", en_callable=self._english_callable)
                 self.model = Kokoro(
                     str(MODEL_PATH),
                     str(VOICES_PATH),
@@ -129,9 +178,13 @@ class KokoroEngine:
                     "threads": self.threads,
                     "total_ms": round(elapsed * 1000),
                     "mixed_zh_en": True,
-                    "english_frontend": "misaki-espeak-fallback",
+                    "english_frontend": self.english_frontend,
+                    "pure_english_direct": self.en_g2p is not None,
                 }
-                print(f"[Project5] Kokoro FP32 mixed zh-en ready in {elapsed:.2f}s", flush=True)
+                print(
+                    f"[Project5] Kokoro bilingual ready in {elapsed:.2f}s frontend={self.english_frontend}",
+                    flush=True,
+                )
             except Exception as exc:
                 self.load_error = f"{type(exc).__name__}: {exc}"
                 self.loaded = False
@@ -154,7 +207,7 @@ class KokoroEngine:
 
     @staticmethod
     def _split_text(text: str, max_chars: int = 180) -> Iterable[str]:
-        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"[ \t]+", " ", text).strip()
         if len(text) <= max_chars:
             yield text
             return
@@ -179,7 +232,14 @@ class KokoroEngine:
     def _phonemize_cached(self, text: str) -> str:
         if self.g2p is None:
             raise RuntimeError("Chinese-English G2P is not loaded")
-        phonemes, _ = self.g2p(text)
+        normalized = _normalize_text(text)
+        # Pure English should never travel through ZHG2P's brittle interleaving
+        # regex. Give the whole sentence to the real English G2P so grammar/POS
+        # context and pronunciation remain continuous.
+        if not _contains_cjk(normalized) and re.search(r"[A-Za-z]", normalized):
+            phonemes = self._english_callable(normalized)
+        else:
+            phonemes, _ = self.g2p(normalized)
         if not phonemes or not phonemes.strip():
             raise RuntimeError("Chinese-English G2P returned empty phonemes")
         if "❓" in phonemes:
@@ -204,7 +264,6 @@ class KokoroEngine:
         total_started = time.perf_counter()
         g2p_seconds = 0.0
         inference_seconds = 0.0
-        write_seconds = 0.0
         audio_parts = []
         sample_rate = SAMPLE_RATE
 
@@ -226,7 +285,7 @@ class KokoroEngine:
             if not audio.size:
                 continue
             if index and audio_parts:
-                audio_parts.append(np.zeros(int(sample_rate * 0.12), dtype=np.float32))
+                audio_parts.append(np.zeros(int(sample_rate * 0.10), dtype=np.float32))
             audio_parts.append(audio)
 
         if not audio_parts:
@@ -254,14 +313,13 @@ class KokoroEngine:
             "rtf": round(rtf, 3),
             "backend": self.backend,
             "mixed_zh_en": True,
+            "english_frontend": self.english_frontend,
         }
         print(
             "[Project5][TTS] "
             f"voice={voice} chars={len(text)} threads={self.threads} "
-            f"g2p={self.last_metrics['g2p_ms']}ms "
-            f"infer={self.last_metrics['inference_ms']}ms "
-            f"write={self.last_metrics['write_ms']}ms "
-            f"total={self.last_metrics['total_ms']}ms "
+            f"frontend={self.english_frontend} g2p={self.last_metrics['g2p_ms']}ms "
+            f"infer={self.last_metrics['inference_ms']}ms total={self.last_metrics['total_ms']}ms "
             f"audio={duration:.2f}s rtf={rtf:.3f}",
             flush=True,
         )
