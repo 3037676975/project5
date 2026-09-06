@@ -20,7 +20,7 @@ jobs:
           bash -n scripts/stop.sh
           bash -n scripts/restart.sh
 
-      - name: Simulate BaoTa vhost proxy repair
+      - name: Simulate BaoTa direct vhost proxy repair
         run: |
           TMP="$(mktemp -d)"
           mkdir -p "$TMP/vhost" "$TMP/bin"
@@ -43,6 +43,34 @@ jobs:
           grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
           grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf"
           ! grep -q 'try_files' "$TMP/vhost/project5.conf"
+
+      - name: Reproduce BaoTa included location slash case
+        run: |
+          TMP="$(mktemp -d)"
+          mkdir -p "$TMP/vhost/proxy/project5" "$TMP/bin"
+          cat > "$TMP/vhost/project5.conf" <<EOF
+          server {
+              listen 28442;
+              server_name 127.0.0.1;
+              root /www/wwwroot/project5;
+              include $TMP/vhost/proxy/project5/*.conf;
+          }
+          EOF
+          cat > "$TMP/vhost/proxy/project5/root.conf" <<'EOF'
+          location / {
+              try_files $uri $uri/ /index.html;
+          }
+          EOF
+          cat > "$TMP/bin/nginx" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          chmod +x "$TMP/bin/nginx"
+          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
+          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/proxy/project5/root.conf"
+          grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/proxy/project5/root.conf"
+          ! grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf"
+          test "$(grep -Rhc '^[[:space:]]*location /' "$TMP/vhost" | awk '{s+=$1} END{print s+0}')" -eq 1
 
       - name: Chinese API learning docs
         run: |
