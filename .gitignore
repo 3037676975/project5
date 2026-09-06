@@ -17,5 +17,6 @@ data/project5.db
 data/project5.db-*
 data/audio/*
 !data/audio/.gitkeep
+app/static/previews/
 logs/*
 !logs/.gitkeep
