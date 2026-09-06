@@ -33,6 +33,7 @@ jobs:
       - name: Syntax checks
         run: |
           python -m compileall -q app
+          python -m py_compile scripts/build-voice-previews.py
           bash -n scripts/auto-deploy.sh
           bash -n scripts/repair-runtime-assets.sh
           bash -n scripts/bootstrap-runtime.sh
@@ -77,7 +78,7 @@ jobs:
           print('kokoro-assets-ok')
           PY
 
-      - name: Kokoro real pure English and mixed generation
+      - name: Kokoro real pure English and alternating code-switch generation
         env:
           KOKORO_THREADS: '4'
         run: |
@@ -89,7 +90,7 @@ jobs:
 
           cases = {
               'english': 'Have you ever wondered how AI-generated voices work? Open-source TTS models are getting surprisingly powerful.',
-              'mixed': '今天学习 OpenAI、ChatGPT、LangChain、RAG、Agent、MCP、LLM 和 API，然后继续学习。',
+              'switches': '嗨，今天聊点轻松的。I really like simple tools that just work. 最近我在用 ChatGPT 和 LangChain 做 AI 小工具，and it feels pretty useful. 好，我们继续吧。',
           }
           for name, text in cases.items():
               target = Path(f'/tmp/project5-{name}.wav')
@@ -97,8 +98,10 @@ jobs:
               assert target.exists() and target.stat().st_size > 44
               info = sf.info(str(target))
               assert info.frames > 0 and info.duration > 0
-              print(name, 'ok', target.stat().st_size, duration, engine.english_frontend)
+              print(name, 'ok', target.stat().st_size, duration, engine.english_frontend, engine.last_metrics.get('mixed_boundary'))
           assert engine.english_frontend == 'misaki-en-g2p+espeak-fallback', engine.english_frontend
+          assert engine.load_metrics.get('mixed_boundary') == 'soft-join-v1', engine.load_metrics
+          assert engine.last_metrics.get('mixed_boundary') == 'soft-join-v1', engine.last_metrics
           PY
 
       - name: Edge TTS real online generation
@@ -109,10 +112,11 @@ jobs:
           import edge_tts
           from mutagen.mp3 import MP3
           target = Path('/tmp/project5-edge.mp3')
+          text = '嗨，今天聊点轻松的。I really like simple tools that just work. 最近我们继续测试 Edge TTS。'
           for attempt in range(1, 4):
               try:
                   target.unlink(missing_ok=True)
-                  edge_tts.Communicate('你好，这是 Project5 Edge TTS API test。','zh-CN-XiaoxiaoNeural').save_sync(str(target))
+                  edge_tts.Communicate(text,'zh-CN-XiaoxiaoNeural').save_sync(str(target))
                   assert target.stat().st_size > 512 and MP3(str(target)).info.length > 0
                   print('edge-real-generation-ok')
                   break
@@ -146,7 +150,7 @@ jobs:
 
           with TestClient(app) as client:
               k = client.post('/admin/speech', headers=headers, json={
-                  'input':'Have you ever wondered how AI-generated voices work?',
+                  'input':'嗨，今天聊点轻松的。I really like simple tools that just work. 最近我们继续学习 LangChain，and it feels useful. 好，我们继续。',
                   'engine':'kokoro','voice':'zf_001','speed':1.0})
               e = client.post('/admin/speech', headers=headers, json={
                   'input':'今天测试 Edge TTS。','engine':'edge','voice':'zh-CN-XiaoxiaoNeural','speed':1.0})
