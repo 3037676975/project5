@@ -68,9 +68,10 @@ def ensure_model():
             started = time.perf_counter()
             model = TTS(language="ZH", device="cpu")
             speaker_ids = model.hps.data.spk2id
-            speaker = speaker_ids.get("ZH")
-            if speaker is None:
-                raise RuntimeError(f"MeloTTS ZH speaker missing: {speaker_ids}")
+            # Follow MeloTTS's official API example exactly: speaker_ids['ZH'].
+            # `spk2id` is an HParams object in the current upstream implementation,
+            # so dict.get() is not available and caused our previous smoke-test failure.
+            speaker = speaker_ids["ZH"]
             MODEL = model
             SPEAKER_ID = speaker
             MODEL_LOADED_AT = time.time()
@@ -84,7 +85,7 @@ def ensure_model():
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Project5Melo/1.1"
+    server_version = "Project5Melo/1.2"
 
     def log_message(self, fmt: str, *args) -> None:
         print("[Project5][Melo][HTTP] " + (fmt % args), flush=True)
