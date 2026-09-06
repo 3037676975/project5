@@ -3,11 +3,17 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
-REPO_ID = os.getenv("KOKORO_REPO_ID", "hexgrad/Kokoro-82M-v1.1-zh")
+ROOT = Path(__file__).resolve().parent.parent
+REPO_ID = "hexgrad/Kokoro-82M-v1.1-zh"
 SAMPLE_RATE = 24000
+MODEL_PATH = Path(os.getenv("KOKORO_ONNX_MODEL", ROOT / "models" / "kokoro-v1.1-zh.int8.onnx"))
+VOICES_PATH = Path(os.getenv("KOKORO_ONNX_VOICES", ROOT / "models" / "voices-v1.1-zh.bin"))
+CONFIG_PATH = Path(os.getenv("KOKORO_ONNX_CONFIG", ROOT / "models" / "config.json"))
 
 # Kokoro-82M-v1.1-zh Chinese voices. zf = female, zm = male.
 CHINESE_VOICES = [
@@ -36,21 +42,24 @@ def voice_meta(voice: str) -> dict:
 
 
 class KokoroEngine:
-    """Lazy-loaded, single-model Kokoro inference engine.
+    """CPU-optimized Kokoro-82M-v1.1-zh engine using ONNX Runtime.
 
-    Project5 keeps one model instance in memory. The model is also preloaded in a
-    background thread at service startup so the first browser request does not spend
-    a long time downloading/loading the model behind Nginx.
+    The previous Project5 engine used the reference PyTorch KModel on CPU. That is
+    correct but much slower on commodity cloud CPUs. This engine keeps the same
+    Kokoro-82M-v1.1-zh model and voices, but runs the official/community ONNX INT8
+    export locally. Model files and the complete voice pack are downloaded once by
+    auto-deploy.sh, so requests never download a voice from Hugging Face at runtime.
     """
 
     def __init__(self) -> None:
         self.model = None
-        self.pipeline = None
-        self.en_pipeline = None
+        self.g2p = None
         self.loaded = False
         self.loading = False
         self.load_error: str | None = None
-        self.device = os.getenv("KOKORO_DEVICE", "cpu")
+        self.device = "cpu"
+        self.backend = "onnx-int8"
+        self.last_metrics: dict = {}
         self._load_lock = threading.Lock()
 
     def load(self) -> None:
@@ -62,35 +71,35 @@ class KokoroEngine:
                 return
             self.loading = True
             self.load_error = None
-            print(f"[Project5] Loading Kokoro model: {REPO_ID} on {self.device} ...", flush=True)
+            started = time.perf_counter()
+            print(f"[Project5] Loading Kokoro ONNX INT8: {MODEL_PATH}", flush=True)
             try:
-                import torch
-                from kokoro import KModel, KPipeline
+                missing = [str(path) for path in (MODEL_PATH, VOICES_PATH, CONFIG_PATH) if not path.exists()]
+                if missing:
+                    raise FileNotFoundError(
+                        "Kokoro ONNX files are missing: " + ", ".join(missing) + ". Run scripts/auto-deploy.sh."
+                    )
 
-                threads = int(os.getenv("KOKORO_THREADS", str(min(8, os.cpu_count() or 4))))
-                if self.device == "cpu":
-                    torch.set_num_threads(max(1, threads))
+                # Set CPU thread hints before importing ONNX Runtime through kokoro_onnx.
+                threads = max(1, int(os.getenv("KOKORO_THREADS", str(min(8, os.cpu_count() or 4)))))
+                os.environ.setdefault("OMP_NUM_THREADS", str(threads))
+                os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
-                self.model = KModel(repo_id=REPO_ID).to(self.device).eval()
-                # Official v1.1-zh sample uses an English pipeline as the callable for
-                # Latin/English fragments inside Chinese sentences.
-                self.en_pipeline = KPipeline(lang_code="a", repo_id=REPO_ID, model=False)
+                from kokoro_onnx import Kokoro
+                from misaki import zh
 
-                def en_callable(text: str) -> str:
-                    result = next(self.en_pipeline(text))
-                    return result.phonemes
-
-                self.pipeline = KPipeline(
-                    lang_code="z",
-                    repo_id=REPO_ID,
-                    model=self.model,
-                    en_callable=en_callable,
+                self.g2p = zh.ZHG2P(version="1.1")
+                self.model = Kokoro(
+                    str(MODEL_PATH),
+                    str(VOICES_PATH),
+                    vocab_config=str(CONFIG_PATH),
                 )
                 self.loaded = True
-                print("[Project5] Kokoro model loaded successfully.", flush=True)
+                elapsed = time.perf_counter() - started
+                print(f"[Project5] Kokoro ONNX loaded successfully in {elapsed:.2f}s.", flush=True)
             except Exception as exc:
                 self.load_error = f"{type(exc).__name__}: {exc}"
-                print(f"[Project5] Kokoro model load failed: {self.load_error}", flush=True)
+                print(f"[Project5] Kokoro ONNX load failed: {self.load_error}", flush=True)
                 raise
             finally:
                 self.loading = False
@@ -98,19 +107,17 @@ class KokoroEngine:
     def start_background_load(self) -> None:
         if self.loaded or self.loading:
             return
-        thread = threading.Thread(target=self._background_load, name="kokoro-preload", daemon=True)
-        thread.start()
+        threading.Thread(target=self._background_load, name="kokoro-onnx-preload", daemon=True).start()
 
     def _background_load(self) -> None:
         try:
             self.load()
         except Exception:
-            # Error is already saved in load_error and printed to app.log.
             pass
 
     @staticmethod
-    def _split_text(text: str, max_chars: int = 180) -> Iterable[str]:
-        """Split long Chinese text at punctuation to keep pronunciation stable."""
+    def _split_text(text: str, max_chars: int = 220) -> Iterable[str]:
+        """Split long Chinese text at punctuation while keeping short requests in one inference."""
         text = re.sub(r"\s+", " ", text).strip()
         if len(text) <= max_chars:
             yield text
@@ -133,6 +140,13 @@ class KokoroEngine:
         if current.strip():
             yield current.strip()
 
+    @lru_cache(maxsize=256)
+    def _phonemize_cached(self, text: str) -> str:
+        if self.g2p is None:
+            raise RuntimeError("Chinese G2P is not loaded")
+        phonemes, _ = self.g2p(text)
+        return phonemes
+
     def generate(self, text: str, voice: str, speed: float, output_path: Path) -> float:
         if voice not in CHINESE_VOICES:
             raise ValueError(f"Unsupported voice: {voice}")
@@ -148,34 +162,64 @@ class KokoroEngine:
         if not chunks:
             raise ValueError("input text is empty")
 
+        total_started = time.perf_counter()
+        g2p_seconds = 0.0
+        inference_seconds = 0.0
         audio_parts = []
-        silence = np.zeros(int(SAMPLE_RATE * 0.12), dtype=np.float32)
+        sample_rate = SAMPLE_RATE
+
         for index, chunk in enumerate(chunks):
-            generator = self.pipeline(chunk, voice=voice, speed=float(speed))
-            chunk_parts = []
-            for result in generator:
-                audio = result.audio
-                if hasattr(audio, "detach"):
-                    audio = audio.detach().cpu().numpy()
-                audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-                if audio.size:
-                    chunk_parts.append(audio)
-            if not chunk_parts:
+            g2p_started = time.perf_counter()
+            phonemes = self._phonemize_cached(chunk)
+            g2p_seconds += time.perf_counter() - g2p_started
+
+            infer_started = time.perf_counter()
+            samples, sample_rate = self.model.create(
+                phonemes,
+                voice=voice,
+                speed=float(speed),
+                is_phonemes=True,
+            )
+            inference_seconds += time.perf_counter() - infer_started
+
+            audio = np.asarray(samples, dtype=np.float32).reshape(-1)
+            if not audio.size:
                 continue
             if index and audio_parts:
-                audio_parts.append(silence)
-            audio_parts.extend(chunk_parts)
+                audio_parts.append(np.zeros(int(sample_rate * 0.12), dtype=np.float32))
+            audio_parts.append(audio)
 
         if not audio_parts:
-            raise RuntimeError("Kokoro returned no audio")
+            raise RuntimeError("Kokoro ONNX returned no audio")
 
         wav = np.concatenate(audio_parts)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(str(output_path), wav, SAMPLE_RATE, subtype="PCM_16")
-        return round(len(wav) / SAMPLE_RATE, 3)
+        sf.write(str(output_path), wav, sample_rate, subtype="PCM_16")
+
+        duration = len(wav) / sample_rate
+        total_seconds = time.perf_counter() - total_started
+        rtf = total_seconds / duration if duration > 0 else 0.0
+        self.last_metrics = {
+            "chars": len(text),
+            "voice": voice,
+            "speed": float(speed),
+            "g2p_ms": round(g2p_seconds * 1000),
+            "inference_ms": round(inference_seconds * 1000),
+            "total_ms": round(total_seconds * 1000),
+            "audio_seconds": round(duration, 3),
+            "rtf": round(rtf, 3),
+            "backend": self.backend,
+        }
+        print(
+            "[Project5][TTS] "
+            f"voice={voice} chars={len(text)} g2p={self.last_metrics['g2p_ms']}ms "
+            f"infer={self.last_metrics['inference_ms']}ms total={self.last_metrics['total_ms']}ms "
+            f"audio={duration:.2f}s rtf={rtf:.3f}",
+            flush=True,
+        )
+        return round(duration, 3)
 
 
 engine = KokoroEngine()
-# Start downloading/loading immediately after the service process imports this module.
-# The web server can still become healthy quickly because this runs in the background.
+# Model and voices are local files. Preload them once so the first request is fast.
 engine.start_background_load()
