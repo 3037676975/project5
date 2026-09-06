@@ -89,18 +89,34 @@ if ROUTES_REGISTERED:
 
         return _notes_payload(engine)
 
+    # Importing this registers the optional 24-hour generated-audio retention API
+    # and worker. It intentionally excludes fixed preview files under /static/previews.
+    from app import audio_retention as _audio_retention  # noqa: F401,E402
+
     @app.get("/deploy-version")
     def deploy_version() -> dict:
         return {
             "service": "project5",
             "commit": os.getenv("PROJECT5_COMMIT", "unknown"),
-            "ui": "manual-preview-voice-notes-v1",
+            "ui": "voice-library-retention-v1",
+            "features": [
+                "manual-persistent-previews",
+                "voice-library-table",
+                "batch-preview-progress-ring",
+                "persistent-voice-notes",
+                "optional-24h-audio-retention",
+                "dual-engine-api-docs",
+            ],
         }
 
     @app.middleware("http")
     async def voice_note_cache_headers(request, call_next):
         response = await call_next(request)
-        if request.url.path in {"/static/preview-admin.js", "/deploy-version"}:
+        if request.url.path in {
+            "/static/preview-admin.js",
+            "/static/voice-library.js",
+            "/deploy-version",
+        }:
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
