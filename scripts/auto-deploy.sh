@@ -49,6 +49,11 @@ PORT="${PROJECT5_PORT:-8005}"
 pkill -f 'scripts/setup-melo.sh' >/dev/null 2>&1 || true
 bash "$PROJECT_DIR/scripts/stop-melo.sh" >/dev/null 2>&1 || true
 
+# Fixed voice previews are administrator-controlled now. Stop the legacy preview
+# builder immediately so an old deployment cannot keep the UI stuck at
+# "后台生成中" or consume CPU while the new code is coming online.
+pkill -f 'scripts/build-voice-previews.py' >/dev/null 2>&1 || true
+
 echo '[2/5] 启动 Kokoro + Edge 主部署 worker'
 LOG_FILE="$PROJECT_DIR/logs/bootstrap-runtime.log"
 WORKER="$PROJECT_DIR/scripts/repair-runtime-assets.sh"
@@ -70,6 +75,7 @@ for _ in {1..120}; do
   PAGE="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
   if printf '%s' "$PAGE" | grep -q 'Kokoro 本地试听' \
     && printf '%s' "$PAGE" | grep -q 'Edge 在线试听' \
+    && printf '%s' "$PAGE" | grep -q 'preview-admin.js' \
     && ! printf '%s' "$PAGE" | grep -q 'MeloTTS 本地试听'; then
     LIVE=1
     break
@@ -78,8 +84,8 @@ for _ in {1..120}; do
 done
 
 if [ "$LIVE" -eq 1 ]; then
-  echo '[5/5] [OK] 新版双引擎后台已在线：Kokoro + Edge'
-  echo '[Project5] Kokoro 官方英文 G2P 增强会在后台准备完成后自动重启一次 API，并做真实中英生成测试。'
+  echo '[5/5] [OK] 新版双引擎后台已在线：Kokoro + Edge + 手动固定试听'
+  echo '[Project5] 固定试听不会自动生成；由管理员在后台保存文案并手动生成，文件永久保存在服务器本地。'
   exit 0
 fi
 
