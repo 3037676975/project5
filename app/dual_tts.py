@@ -140,3 +140,8 @@ def engine_metrics(engine_name: str) -> dict:
     if normalize_engine(engine_name) == EDGE_ENGINE:
         return dict(_edge_metrics)
     return dict(kokoro_engine.last_metrics)
+
+
+# Register admin-only persistent voice-note routes. This module is imported by
+# app.entry after app.main has created the FastAPI application.
+from app import voice_notes as _voice_notes  # noqa: E402,F401
