@@ -4,7 +4,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +22,10 @@ PREVIEW_ROOT = ROOT / "app" / "static" / "previews"
 MANIFEST = PREVIEW_ROOT / "manifest.json"
 LOG_DIR = ROOT / "logs"
 LOCK_PATH = LOG_DIR / "voice-preview.lock"
+DEFAULT_PREVIEW_VOICES = {
+    "kokoro": "zf_001",
+    "edge": "zh-CN-XiaoxiaoNeural",
+}
 
 PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,11 +86,15 @@ from app.dual_tts import audio_extension, generate, voice_list  # noqa: E402
 
 manifest = load_manifest()
 rebuild = os.getenv("PREVIEW_REBUILD", "0") == "1"
+limit = max(0, int(os.getenv("PREVIEW_MAX_PER_ENGINE", "0") or "0"))
 
 for engine in ("kokoro", "edge"):
     engine_dir = PREVIEW_ROOT / engine
     engine_dir.mkdir(parents=True, exist_ok=True)
-    items = voice_list(engine)
+    preferred = DEFAULT_PREVIEW_VOICES[engine]
+    items = sorted(voice_list(engine), key=lambda item: item["id"] != preferred)
+    if limit:
+        items = items[:limit]
     print(f"[Preview] building {engine} previews: {len(items)} voices", flush=True)
     ready_map = manifest.setdefault(engine, {})
 
