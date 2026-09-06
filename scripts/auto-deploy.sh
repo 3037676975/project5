@@ -6,7 +6,7 @@ cd "$PROJECT_DIR"
 mkdir -p logs data/audio models
 
 printf '%s\n' '=============================================='
-printf '%s\n' ' Project5 · Verified Auto Deploy'
+printf '%s\n' ' Project5 · Webhook Deploy Dispatcher'
 printf '%s\n' '=============================================='
 
 PYTHON_BIN=""
@@ -17,7 +17,7 @@ for candidate in python3.12 python3.11 python3.10 python3; do
   fi
 done
 [ -n "$PYTHON_BIN" ] || { echo '[ERROR] 需要 Python 3.10+'; exit 1; }
-echo "[1/5] Python: $($PYTHON_BIN --version)"
+echo "[1/4] Python: $($PYTHON_BIN --version)"
 
 set_env_value() {
   local key="$1" value="$2"
@@ -38,60 +38,48 @@ set_env_value KOKORO_ONNX_MODEL "${PROJECT_DIR}/models/kokoro-v1.1-zh.onnx"
 set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/models/voices-v1.1-zh.bin"
 set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/models/config.json"
 chmod 600 .env
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
-PORT="${PROJECT5_PORT:-8005}"
 
-# MeloTTS is no longer part of the production path. Kill a previous background
-# installer/service so it cannot keep consuming CPU/RAM/disk on an 8G server.
+# Legacy/background workers from older commits must not compete with the main
+# deployment lock. Kokoro already has a built-in lightweight English fallback,
+# so the optional heavy English enhancement is never part of webhook deployment.
+pkill -f "$PROJECT_DIR/scripts/setup-kokoro-english.sh" >/dev/null 2>&1 || true
+pkill -f 'scripts/build-voice-previews.py' >/dev/null 2>&1 || true
 pkill -f 'scripts/setup-melo.sh' >/dev/null 2>&1 || true
 bash "$PROJECT_DIR/scripts/stop-melo.sh" >/dev/null 2>&1 || true
 
-# Fixed voice previews are administrator-controlled now. Stop the legacy preview
-# builder immediately so an old deployment cannot keep the UI stuck at
-# "后台生成中" or consume CPU while the new code is coming online.
-pkill -f 'scripts/build-voice-previews.py' >/dev/null 2>&1 || true
+echo '[2/4] 已清理旧的 English/preview/Melo 后台 worker'
+echo '[3/4] 启动唯一的主部署流程；bootstrap.lock 会自动串行多个 Webhook'
 
-echo '[2/5] 启动 Kokoro + Edge 主部署 worker'
 LOG_FILE="$PROJECT_DIR/logs/bootstrap-runtime.log"
 WORKER="$PROJECT_DIR/scripts/repair-runtime-assets.sh"
-if command -v setsid >/dev/null 2>&1; then nohup setsid bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null &
-else nohup bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null & fi
+if command -v setsid >/dev/null 2>&1; then
+  nohup setsid bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null &
+else
+  nohup bash "$WORKER" >> "$LOG_FILE" 2>&1 < /dev/null &
+fi
 BOOT_PID=$!
 disown "$BOOT_PID" 2>/dev/null || true
+printf '%s\n' "$BOOT_PID" > "$PROJECT_DIR/logs/deploy-worker.pid"
 
-echo '[3/5] 后台准备 Kokoro 官方 Misaki 英文 G2P（不是第二个 TTS 模型）'
-EN_LOG="$PROJECT_DIR/logs/kokoro-english-setup.log"
-if command -v setsid >/dev/null 2>&1; then nohup setsid bash "$PROJECT_DIR/scripts/setup-kokoro-english.sh" >> "$EN_LOG" 2>&1 < /dev/null &
-else nohup bash "$PROJECT_DIR/scripts/setup-kokoro-english.sh" >> "$EN_LOG" 2>&1 < /dev/null & fi
-EN_PID=$!
-disown "$EN_PID" 2>/dev/null || true
-
-echo "[4/5] deploy worker=${BOOT_PID} english-g2p=${EN_PID}；等待双引擎页面真实上线"
-LIVE=0
-for _ in {1..120}; do
-  PAGE="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
-  if printf '%s' "$PAGE" | grep -q 'Kokoro 本地试听' \
-    && printf '%s' "$PAGE" | grep -q 'Edge 在线试听' \
-    && printf '%s' "$PAGE" | grep -q 'preview-admin.js' \
-    && ! printf '%s' "$PAGE" | grep -q 'MeloTTS 本地试听'; then
-    LIVE=1
-    break
-  fi
-  sleep 1
-done
-
-if [ "$LIVE" -eq 1 ]; then
-  echo '[5/5] [OK] 新版双引擎后台已在线：Kokoro + Edge + 手动固定试听'
-  echo '[Project5] 固定试听不会自动生成；由管理员在后台保存文案并手动生成，文件永久保存在服务器本地。'
+# Do not make 宝塔/Webhook wait for model download, pip, model preload and a real
+# TTS self-test. Those can legitimately take several minutes on an 8-core CPU and
+# previously caused a false "部署失败" after 120 seconds even while deployment was
+# still progressing normally in the background.
+sleep 1
+if kill -0 "$BOOT_PID" >/dev/null 2>&1; then
+  echo "[4/4] [OK] Webhook 已接收，主部署 worker=${BOOT_PID} 正在后台执行"
+  echo '[Project5] 完整部署结果会写入 logs/bootstrap-runtime.log 和 /runtime.selfcheck。'
+  echo '[Project5] 不再自动启动 Kokoro-English 安装脚本，也不会自动批量生成试听。'
   exit 0
 fi
 
-echo '[5/5] [ERROR] 120 秒内没有看到新版双引擎后台，因此本次部署不能标记成功。'
-echo '[Project5] 最近主部署日志：'
-tail -n 100 "$LOG_FILE" || true
-echo '[Project5] 最近英文 G2P 日志：'
-tail -n 80 "$EN_LOG" || true
+# A very fast worker can also exit 0 because this commit is already deployed.
+# If it exited immediately, inspect the latest log instead of blindly marking fail.
+if tail -n 80 "$LOG_FILE" 2>/dev/null | grep -qE '\[OK\]|已通过自检|新版控制台已在线'; then
+  echo '[4/4] [OK] 主部署已快速完成或当前版本已经在线'
+  exit 0
+fi
+
+echo '[4/4] [ERROR] 主部署 worker 启动后立即异常退出'
+tail -n 120 "$LOG_FILE" || true
 exit 1
