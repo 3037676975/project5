@@ -17,7 +17,7 @@ for candidate in python3.12 python3.11 python3.10 python3; do
   fi
 done
 [ -n "$PYTHON_BIN" ] || { echo '[ERROR] 需要 Python 3.10+'; exit 1; }
-echo "[1/4] Python: $($PYTHON_BIN --version)"
+echo "[1/3] Python: $($PYTHON_BIN --version)"
 
 set_env_value() {
   local key="$1" value="$2"
@@ -43,30 +43,12 @@ set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/models/voices-v1.1-zh.bin"
 set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/models/config.json"
 chmod 600 .env
 
-echo '[2/4] 已写入官方中文 FP32 模型路径'
+echo '[2/3] 配置已写入；保持当前 API 继续运行，先由 worker 自检新版本'
 
-# Important recovery path: the model may finish downloading after an older API
-# process already failed its one-time background preload. In that case the browser
-# can correctly see the model file on disk while the running Python process still
-# keeps the old FileNotFoundError in memory. If all three runtime files are already
-# present, restart the API immediately so it loads the current Git checkout and the
-# now-existing model instead of waiting for another bootstrap cycle.
-MODEL_FILE="$PROJECT_DIR/models/kokoro-v1.1-zh.onnx"
-VOICES_FILE="$PROJECT_DIR/models/voices-v1.1-zh.bin"
-CONFIG_FILE="$PROJECT_DIR/models/config.json"
-MODEL_BYTES="$(stat -c%s "$MODEL_FILE" 2>/dev/null || echo 0)"
-VOICES_BYTES="$(stat -c%s "$VOICES_FILE" 2>/dev/null || echo 0)"
-CONFIG_BYTES="$(stat -c%s "$CONFIG_FILE" 2>/dev/null || echo 0)"
-
-if [ "$MODEL_BYTES" -ge 300000000 ] && [ "$VOICES_BYTES" -ge 53000000 ] && [ "$CONFIG_BYTES" -ge 1000 ]; then
-  echo '[3/4] 模型文件已经齐全，立即重启 API，清除旧的缺文件错误并加载最新代码'
-  bash "$PROJECT_DIR/scripts/restart.sh" || true
-else
-  echo "[3/4] 模型尚未齐全：model=${MODEL_BYTES} voices=${VOICES_BYTES} config=${CONFIG_BYTES}，交给后台 worker 下载"
-fi
-
-# Always launch the runtime worker. The worker itself uses flock, so stale PID files
-# can no longer block a deployment and simultaneous webhooks cannot run two downloads.
+# Do not restart the live API here. bootstrap-runtime.sh verifies the model,
+# creates a real WAV directly, then restarts the API and performs a second real
+# HTTP generation test. A bad commit therefore cannot immediately replace the
+# currently running API before it has passed the deployment checks.
 LOG_FILE="$PROJECT_DIR/logs/bootstrap-runtime.log"
 if command -v setsid >/dev/null 2>&1; then
   nohup setsid bash "$PROJECT_DIR/scripts/bootstrap-runtime.sh" >> "$LOG_FILE" 2>&1 < /dev/null &
@@ -76,6 +58,6 @@ fi
 BOOT_PID=$!
 disown "$BOOT_PID" 2>/dev/null || true
 
-echo "[4/4] 已启动部署 worker PID=${BOOT_PID}"
-echo "[OK] 宝塔 Webhook 可以立即返回；worker 会继续校验模型 → 官方中文自测 → 确认 API ready。"
+echo "[3/3] 已启动自检部署 worker PID=${BOOT_PID}"
+echo "[OK] Webhook 立即返回；worker 会按顺序执行：模型校验 → 直连生成 → 重启 API → HTTP 异步生成 → WAV 校验。"
 exit 0
