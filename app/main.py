@@ -29,6 +29,14 @@ STATIC_DIR = ROOT / "app" / "static"
 LOG_DIR = ROOT / "logs"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "5000"))
 ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
+ADMIN_SESSION_TTL = int(os.getenv("ADMIN_SESSION_TTL", "43200"))
+
+# 管理后台账号采用哈希校验：GitHub 中不保存账号和密码明文。
+# 用户名：SHA-256；密码：PBKDF2-HMAC-SHA256（260000 次）。
+CONSOLE_USERNAME_HASH = "41c300e87e6c6d8a849bbff001c14c8c87793db4393c54f0ff53b163d853d0ea"
+CONSOLE_PASSWORD_SALT = bytes.fromhex("1ff7f5b8853fb2fecb48fb85b6d66615")
+CONSOLE_PASSWORD_HASH = bytes.fromhex("4fc3a3d1a2d5860ca95492170f467c4146d9f435c5408f169de20e7c5e43f2d4")
+ADMIN_SESSIONS: dict[str, float] = {}
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -137,6 +145,11 @@ class KeyUpdate(BaseModel):
     active: bool | None = None
 
 
+class AdminLogin(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=300)
+
+
 def client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
@@ -148,9 +161,42 @@ def key_digest(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def admin_required(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")) -> None:
-    if not x_admin_key or not hmac.compare_digest(x_admin_key, ADMIN_KEY):
-        raise HTTPException(status_code=401, detail="Invalid admin key")
+def verify_console_credentials(username: str, password: str) -> bool:
+    username_digest = hashlib.sha256(username.strip().lower().encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(username_digest, CONSOLE_USERNAME_HASH):
+        return False
+    password_digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        CONSOLE_PASSWORD_SALT,
+        260_000,
+    )
+    return hmac.compare_digest(password_digest, CONSOLE_PASSWORD_HASH)
+
+
+def create_admin_session() -> str:
+    current = time.time()
+    expired = [token for token, expiry in ADMIN_SESSIONS.items() if expiry <= current]
+    for token in expired:
+        ADMIN_SESSIONS.pop(token, None)
+    token = secrets.token_urlsafe(40)
+    ADMIN_SESSIONS[token] = current + ADMIN_SESSION_TTL
+    return token
+
+
+def admin_required(
+    x_admin_session: str | None = Header(default=None, alias="X-Admin-Session"),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> None:
+    # 保留 ADMIN_KEY 兼容旧脚本；网页控制台默认使用账号密码换取临时 Session。
+    if x_admin_key and hmac.compare_digest(x_admin_key, ADMIN_KEY):
+        return
+    if not x_admin_session:
+        raise HTTPException(status_code=401, detail="Admin login required")
+    expiry = ADMIN_SESSIONS.get(x_admin_session)
+    if not expiry or expiry <= time.time():
+        ADMIN_SESSIONS.pop(x_admin_session, None)
+        raise HTTPException(status_code=401, detail="Admin session expired")
 
 
 def get_api_key(authorization: str | None) -> sqlite3.Row | None:
@@ -247,6 +293,31 @@ def health() -> dict:
 @app.get("/v1/voices")
 def voices() -> dict:
     return {"model": "kokoro-82m-v1.1-zh", "voices": [voice_meta(v) for v in CHINESE_VOICES]}
+
+
+@app.post("/admin/login")
+def admin_login(payload: AdminLogin, request: Request) -> dict:
+    if not verify_console_credentials(payload.username, payload.password):
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    token = create_admin_session()
+    return {
+        "ok": True,
+        "session_token": token,
+        "expires_in": ADMIN_SESSION_TTL,
+        "source_ip": client_ip(request),
+    }
+
+
+@app.post("/admin/logout")
+def admin_logout(x_admin_session: str | None = Header(default=None, alias="X-Admin-Session")) -> dict:
+    if x_admin_session:
+        ADMIN_SESSIONS.pop(x_admin_session, None)
+    return {"ok": True}
+
+
+@app.get("/admin/me", dependencies=[Depends(admin_required)])
+def admin_me() -> dict:
+    return {"ok": True, "role": "administrator"}
 
 
 @app.post("/v1/audio/speech")
