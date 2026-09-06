@@ -1,5 +1,7 @@
 # Project5 API 中文入门与调用文档
 
+> 如果你的目的不是自己学习，而是要把 Project5 接给另一个 AI / Agent / 代码助手，请直接复制仓库根目录的 **`AI_API_CONTEXT.md`** 给它。那份文件只保留接口、参数、异步任务流程和接入约束，不重复本教程内容。
+
 这份文档不是只告诉你“复制一段代码”，而是从 **API 是什么** 开始，解释 Project5 的 Kokoro / Edge TTS API 到底怎么工作。
 
 ---
@@ -519,14 +521,4 @@ FFmpeg / 视频合成
 
 # 17. 一句话理解这套 API
 
-```text
-API Key = 你的通行证
-Endpoint = 你要去的窗口
-POST = 提交一件事情
-JSON = 你交给窗口的表单
-202 + task_id = 窗口给你的取件号
-GET /v1/tasks/{id} = 查询取件进度
-audio_url = 最终生成结果
-```
-
-这就是 Project5 API 调用最核心的原理。
+Project5 API 的核心就是：**提交文本生成任务 → 拿 task_id → 查询状态 → 拿 audio_url。**
