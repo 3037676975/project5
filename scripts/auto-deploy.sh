@@ -45,19 +45,13 @@ source .env
 set +a
 PORT="${PROJECT5_PORT:-8005}"
 
-# Old background jobs are not allowed to hold the deploy lock or consume the CPU
-# while a newer webhook is trying to publish the frontend.
 pkill -f "$PROJECT_DIR/scripts/setup-kokoro-english.sh" >/dev/null 2>&1 || true
 pkill -f 'scripts/build-voice-previews.py' >/dev/null 2>&1 || true
 pkill -f 'scripts/setup-melo.sh' >/dev/null 2>&1 || true
 bash "$PROJECT_DIR/scripts/stop-melo.sh" >/dev/null 2>&1 || true
 echo '[2/5] 已清理旧 English / preview / Melo worker'
 
-# IMPORTANT DEPLOY RULE:
-#   git pull success != process updated != live frontend updated.
-# On an existing installation the .venv is already available, so first replace
-# the process that owns port 8005 and verify the *actual* latest frontend. Heavy
-# model/dependency/selfchecks happen afterwards in the background.
+# Experience rule: code updated != process updated != live version updated.
 FAST_OK=0
 if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
   echo '[3/5] 立即强制替换旧端口进程，并上线刚拉取的前端'
@@ -71,9 +65,6 @@ else
   echo '[3/5] 首次部署尚无 .venv，跳过快速切换，由完整 worker 创建环境'
 fi
 
-# Full verification stays asynchronous so model download/self-tests never make
-# BaoTa wait several minutes. It may restart the same latest commit once more after
-# dependency/model verification, which is intentional.
 LOG_FILE="$PROJECT_DIR/logs/bootstrap-runtime.log"
 WORKER="$PROJECT_DIR/scripts/repair-runtime-assets.sh"
 if command -v setsid >/dev/null 2>&1; then
@@ -86,30 +77,34 @@ disown "$BOOT_PID" 2>/dev/null || true
 printf '%s\n' "$BOOT_PID" > "$PROJECT_DIR/logs/deploy-worker.pid"
 echo "[4/5] 完整部署 worker=${BOOT_PID} 已在后台启动"
 
-if [ "$FAST_OK" -eq 1 ]; then
-  echo "[5/5] [OK] 部署成功：代码、进程、线上前端三层均已切到 commit=${CURRENT_COMMIT}"
+live_is_current() {
+  local page js version
+  page="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
+  js="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  version="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/deploy-version?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  printf '%s' "$page" | grep -q 'Kokoro 本地试听' \
+    && printf '%s' "$page" | grep -q 'Edge 在线试听' \
+    && printf '%s' "$js" | grep -q '这个音色的备注' \
+    && printf '%s' "$js" | grep -q '手动补齐全部音色' \
+    && printf '%s' "$version" | grep -q "$CURRENT_COMMIT"
+}
+
+if [ "$FAST_OK" -eq 1 ] && live_is_current; then
+  echo "[5/5] [OK] 部署成功：代码、端口进程、线上 commit 三层一致 ${CURRENT_COMMIT}"
   echo '[Project5] 后台 worker 会继续完成模型/依赖/真实 TTS 自检。'
   exit 0
 fi
 
-# First deploy or a dependency-changing deploy may need the background worker to
-# repair the runtime before the process can start. Give it a short truthful window;
-# never report success while an old frontend is still the one actually running.
-echo '[5/5] 等待完整 worker 把最新版前端真正启动（最多 90 秒）'
+echo '[5/5] 等待完整 worker 把当前 commit 的最新版前端真正启动（最多 90 秒）'
 for _ in {1..90}; do
-  PAGE="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
-  JS="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
-  if printf '%s' "$PAGE" | grep -q 'Kokoro 本地试听' \
-    && printf '%s' "$PAGE" | grep -q 'Edge 在线试听' \
-    && printf '%s' "$JS" | grep -q '这个音色的备注' \
-    && printf '%s' "$JS" | grep -q '手动补齐全部音色'; then
-    echo "[5/5] [OK] 完整 worker 已把最新版前端真实上线 commit=${CURRENT_COMMIT}"
+  if live_is_current; then
+    echo "[5/5] [OK] 完整 worker 已把当前 commit 真实上线 ${CURRENT_COMMIT}"
     exit 0
   fi
   sleep 1
 done
 
-echo '[5/5] [ERROR] 最新前端 90 秒内仍未真实上线；后台 worker 继续运行，但本次不能标记成功。'
+echo '[5/5] [ERROR] 当前 commit 90 秒内仍未真实上线；后台 worker 继续运行，但本次不能标记成功。'
 echo '[Project5] 最近部署日志：'
 tail -n 120 "$LOG_FILE" || true
 exit 1
