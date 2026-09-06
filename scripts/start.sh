@@ -22,8 +22,8 @@ PID_FILE="logs/project5.pid"
 CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 export PROJECT5_COMMIT="$CURRENT_COMMIT"
 
-# Never trust a stale PID file. start.sh itself guarantees the Project5 port is
-# free before launching, so it is safe even when called without restart.sh.
+# Deployment experience rule: code updated != process updated != live UI updated.
+# Always release the real Project5 port first, even if a stale PID file says otherwise.
 bash "$PROJECT_DIR/scripts/stop.sh"
 
 nohup .venv/bin/python -m uvicorn app.entry:app \
@@ -34,20 +34,23 @@ nohup .venv/bin/python -m uvicorn app.entry:app \
 PID=$!
 echo "$PID" > "$PID_FILE"
 
-# A process existing for 2 seconds is not enough. Verify the actual page, updated
-# UI JS, AND the commit reported by the running process.
 ONLINE=0
-for _ in {1..40}; do
+for _ in {1..50}; do
   if ! kill -0 "$PID" 2>/dev/null; then break; fi
   PAGE="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
-  JS="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  PREVIEW_JS="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  LIBRARY_JS="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/voice-library.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
   VERSION="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/deploy-version?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
   if printf '%s' "$PAGE" | grep -q 'Kokoro 本地试听' \
     && printf '%s' "$PAGE" | grep -q 'Edge 在线试听' \
     && printf '%s' "$PAGE" | grep -q 'preview-admin.js' \
-    && printf '%s' "$JS" | grep -q '这个音色的备注' \
-    && printf '%s' "$JS" | grep -q '手动补齐全部音色' \
-    && printf '%s' "$VERSION" | grep -q "$CURRENT_COMMIT"; then
+    && printf '%s' "$PREVIEW_JS" | grep -q 'voice-library.js' \
+    && printf '%s' "$PREVIEW_JS" | grep -q '一键生成全部试听' \
+    && printf '%s' "$LIBRARY_JS" | grep -q '音色库 / 固定试听表' \
+    && printf '%s' "$LIBRARY_JS" | grep -q '24小时自动清理' \
+    && printf '%s' "$LIBRARY_JS" | grep -q 'Project5 双引擎 API' \
+    && printf '%s' "$VERSION" | grep -q "$CURRENT_COMMIT" \
+    && printf '%s' "$VERSION" | grep -q 'voice-library-retention-v1'; then
     ONLINE=1
     break
   fi
@@ -62,4 +65,4 @@ if [ "$ONLINE" -ne 1 ]; then
 fi
 
 echo "[Project5] 最新进程已上线 commit=${CURRENT_COMMIT} http://127.0.0.1:${PORT} PID=${PID}"
-echo "[Project5] 已验证：端口新进程 + 当前 commit + Kokoro/Edge + 手动固定试听 + 音色备注"
+echo "[Project5] 已验证：端口新进程 + 当前 commit + 音色库表格 + 批量圆环进度 + 音色备注 + 24h保存开关 + API文档"
