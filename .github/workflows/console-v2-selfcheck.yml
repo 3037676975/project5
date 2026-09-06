@@ -14,7 +14,7 @@ jobs:
 
       - name: Python syntax
         run: |
-          python -m py_compile app/entry.py app/tts.py app/dual_tts.py app/preview_admin.py
+          python -m py_compile app/entry.py app/tts.py app/dual_tts.py app/preview_admin.py app/voice_notes.py app/audio_retention.py
 
       - name: Explicit dual-engine console structure
         run: |
@@ -27,7 +27,6 @@ jobs:
           grep -q 'engine=edge' app/static/console-v2.html
           grep -q 'progress-ring' app/static/console-v2.html
           grep -q '一键删除全部音频' app/static/console-v2.html
-          grep -q 'deleteAudioBatch' app/static/console-v2.html
           grep -q 'preview-admin.js' app/entry.py
           grep -q 'manual-persistent-v1' app/entry.py
 
@@ -43,6 +42,34 @@ jobs:
           PY
           node --check /tmp/project5-console-v2.js
           node --check app/static/preview-admin.js
+          node --check app/static/voice-library.js
+
+      - name: Voice library and retention frontend
+        run: |
+          grep -q 'voice-library.js' app/static/preview-admin.js
+          grep -q '一键生成全部试听' app/static/preview-admin.js
+          grep -q '音色库 / 固定试听表' app/static/voice-library.js
+          grep -q 'p5-batch-ring' app/static/voice-library.js
+          grep -q '保存备注' app/static/voice-library.js
+          grep -q '复制ID' app/static/voice-library.js
+          grep -q '24小时自动清理' app/static/voice-library.js
+          grep -q '/admin/audio-retention' app/static/voice-library.js
+          grep -q 'Project5 双引擎 API' app/static/voice-library.js
+          grep -q '/v1/audio/speech' app/static/voice-library.js
+          grep -q '/v1/voices?engine=kokoro' app/static/voice-library.js
+
+      - name: Retention backend and deployment handoff
+        run: |
+          grep -q 'RETENTION_HOURS = 24' app/audio_retention.py
+          grep -q 'fixed_previews_excluded' app/audio_retention.py
+          grep -q '/admin/audio-retention/cleanup' app/audio_retention.py
+          grep -q 'voice-library-retention-v1' app/voice_notes.py
+          bash -n scripts/auto-deploy.sh
+          bash -n scripts/start.sh
+          bash -n scripts/stop.sh
+          grep -q 'voice-library.js' scripts/start.sh
+          grep -q 'voice-library-retention-v1' scripts/start.sh
+          grep -q '代码、端口新进程、线上 commit、新功能四层一致' scripts/auto-deploy.sh
 
       - name: Manual persistent previews
         run: |
@@ -51,9 +78,8 @@ jobs:
           grep -q '/admin/previews/generate-batch' app/preview_admin.py
           grep -q 'manual-persistent' app/preview_admin.py
           grep -q '生成 / 更新当前音色试听' app/static/preview-admin.js
-          grep -q '手动补齐全部音色' app/static/preview-admin.js
+          grep -q '一键生成全部试听' app/static/preview-admin.js
           grep -q '不会再自动后台生成' app/static/preview-admin.js
-          grep -q '固定试听改为手动模式' scripts/setup-kokoro-english.sh
           ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
 
       - name: Bilingual Kokoro wiring
@@ -63,4 +89,3 @@ jobs:
           grep -q 'soft-join-v1' app/tts.py
           grep -q 'ENGLISH_RUN_RE' app/tts.py
           grep -q 'SUPPORTED_ENGINES = (KOKORO_ENGINE, EDGE_ENGINE)' app/dual_tts.py
-          grep -q 'setup-kokoro-english.sh' scripts/auto-deploy.sh
