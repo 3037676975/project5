@@ -169,6 +169,9 @@
     const oldText = selector(engine, 'PreviewText');
     if (oldText) oldText.style.display = 'none';
 
+    const note = document.querySelector(`#${engine} .engine-note`);
+    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以手动补齐全部音色；生成后的试听会永久保存在服务器本地。';
+
     const controls = document.createElement('div');
     controls.innerHTML = `
       <div class="field" style="margin-top:10px">
