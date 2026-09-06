@@ -5,16 +5,30 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 mkdir -p logs
 
-# Wait until the main bootstrap has finished touching .venv/model assets.
+# auto-deploy starts the base runtime and English enhancement in parallel. On a
+# brand-new server .venv may not exist yet, so wait without holding bootstrap.lock;
+# otherwise the English worker could block the bootstrap that is supposed to create it.
+echo '[Kokoro-English] 等待主部署创建 .venv（不占部署锁）'
+VENV_READY=0
+for _ in {1..300}; do
+  if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    VENV_READY=1
+    break
+  fi
+  sleep 1
+done
+[ "$VENV_READY" -eq 1 ] || {
+  echo '[Kokoro-English][ERROR] 300 秒内主部署没有创建 .venv';
+  exit 1;
+}
+
+# Now serialize any pip/model changes with the main bootstrap.
 exec 9>"$PROJECT_DIR/logs/bootstrap.lock"
 if command -v flock >/dev/null 2>&1; then
+  echo '[Kokoro-English] 等待主部署释放 bootstrap.lock'
   flock 9
 fi
 
-[ -x "$PROJECT_DIR/.venv/bin/python" ] || {
-  echo '[Kokoro-English] .venv 尚未创建，主部署没有完成';
-  exit 1;
-}
 PY="$PROJECT_DIR/.venv/bin/python"
 
 printf '%s\n' '================================================'
