@@ -45,22 +45,39 @@ fi
 echo "[Project5][PROXY] 站点配置：$CANDIDATE"
 
 if grep -Eq "proxy_pass[[:space:]]+http://127\.0\.0\.1:${UPSTREAM_PORT}([/;[:space:]]|$)" "$CANDIDATE"; then
-  echo "[Project5][PROXY] 已指向 http://127.0.0.1:${UPSTREAM_PORT}，无需修改"
-  exit 0
+  echo "[Project5][PROXY] 主配置已直接指向 http://127.0.0.1:${UPSTREAM_PORT}"
 fi
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
-BACKUP="$BACKUP_DIR/$(basename "$CANDIDATE").${STAMP}.bak"
-cp -a "$CANDIDATE" "$BACKUP"
+TXN_DIR="$BACKUP_DIR/${STAMP}-$$"
+MANIFEST="$TXN_DIR/manifest.tsv"
+mkdir -p "$TXN_DIR"
 
-PROJECT5_NGINX_CONF="$CANDIDATE" PROJECT5_PUBLIC_PORT="$PUBLIC_PORT" PROJECT5_UPSTREAM_PORT="$UPSTREAM_PORT" python3 - <<'PY'
+# BaoTa often keeps reverse-proxy `location /` blocks in an included file under
+# vhost/nginx/proxy/*.conf instead of in the top-level vhost. The old deploy script
+# only inspected the top-level file. When it failed to see the included root
+# location it inserted a second `location /`, and `nginx -t` correctly rejected it
+# as "duplicate location /". This patcher follows includes belonging to the target
+# server block and replaces the real root location at its source.
+PROJECT5_NGINX_CONF="$CANDIDATE" \
+PROJECT5_PUBLIC_PORT="$PUBLIC_PORT" \
+PROJECT5_UPSTREAM_PORT="$UPSTREAM_PORT" \
+PROJECT5_NGINX_TXN_DIR="$TXN_DIR" \
+PROJECT5_NGINX_MANIFEST="$MANIFEST" \
+python3 - <<'PY'
+from __future__ import annotations
+
+import glob
+import os
+import re
+import shutil
 from pathlib import Path
-import os, re
 
-path = Path(os.environ['PROJECT5_NGINX_CONF'])
+main = Path(os.environ['PROJECT5_NGINX_CONF']).resolve()
 public_port = os.environ['PROJECT5_PUBLIC_PORT']
 upstream_port = os.environ['PROJECT5_UPSTREAM_PORT']
-text = path.read_text(encoding='utf-8')
+txn_dir = Path(os.environ['PROJECT5_NGINX_TXN_DIR']).resolve()
+manifest = Path(os.environ['PROJECT5_NGINX_MANIFEST']).resolve()
 
 PROXY = f'''    # PROJECT5-AUTO-PROXY-START
     location / {{
@@ -78,90 +95,211 @@ PROXY = f'''    # PROJECT5-AUTO-PROXY-START
     # PROJECT5-AUTO-PROXY-END
 '''
 
-marker = re.compile(r'\s*# PROJECT5-AUTO-PROXY-START.*?# PROJECT5-AUTO-PROXY-END\s*', re.S)
-if marker.search(text):
-    path.write_text(marker.sub('\n' + PROXY, text, count=1), encoding='utf-8')
-    raise SystemExit(0)
+marker_re = re.compile(
+    r'^[ \t]*# PROJECT5-AUTO-PROXY-START\s*\n.*?^[ \t]*# PROJECT5-AUTO-PROXY-END\s*\n?',
+    re.M | re.S,
+)
+server_start_re = re.compile(r'(?m)^[ \t]*server\s*\{')
+location_root_re = re.compile(r'(?m)^[ \t]*location[ \t]+(?:\^~[ \t]+)?/[ \t]*\{')
+include_re = re.compile(r'(?m)^[ \t]*include[ \t]+([^;\n]+);')
+listen_re = re.compile(rf'(?m)^[ \t]*listen[ \t]+(?:[^;\n]*:)?{re.escape(public_port)}(?:[ \t;]|$)')
 
-# Basic brace scanner. BaoTa-generated vhost files are regular Nginx text; this
-# deliberately modifies only the server block that listens on PROJECT5_PUBLIC_PORT.
-def blocks(src: str, keyword: str):
-    out = []
-    for m in re.finditer(rf'\b{re.escape(keyword)}\b[^{{]*{{', src):
-        start = m.start()
-        open_i = src.find('{', m.start(), m.end())
-        depth = 0
-        in_s = in_d = False
-        esc = False
-        for i in range(open_i, len(src)):
-            ch = src[i]
-            if esc:
-                esc = False; continue
-            if ch == '\\':
-                esc = True; continue
-            if ch == "'" and not in_d: in_s = not in_s; continue
-            if ch == '"' and not in_s: in_d = not in_d; continue
-            if in_s or in_d: continue
-            if ch == '{': depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0:
-                    out.append((start, open_i, i + 1))
-                    break
-    return out
 
-server = None
-listen_re = re.compile(rf'\blisten\s+(?:[^;\n]*:)?{re.escape(public_port)}(?:\s|;|\b)')
-for s, o, e in blocks(text, 'server'):
-    chunk = text[s:e]
-    if listen_re.search(chunk):
-        server = (s, o, e)
-        break
-
-if server is None:
-    raise SystemExit(f'No server block listening on {public_port}')
-
-s, o, e = server
-chunk = text[s:e]
-
-# Prefer replacing a root location in the selected server block. If it does not
-# exist, insert our proxy location before the server closing brace.
-location_matches = []
-for lm in re.finditer(r'\blocation\s+(?:\^~\s+)?/\s*{', chunk):
-    open_rel = chunk.find('{', lm.start(), lm.end())
+def matching_brace(text: str, open_i: int) -> int:
     depth = 0
-    for i in range(open_rel, len(chunk)):
-        if chunk[i] == '{': depth += 1
-        elif chunk[i] == '}':
+    in_single = False
+    in_double = False
+    escaped = False
+    in_comment = False
+    for i in range(open_i, len(text)):
+        ch = text[i]
+        if in_comment:
+            if ch == '\n':
+                in_comment = False
+            continue
+        if escaped:
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+            continue
+        if not in_single and not in_double and ch == '#':
+            in_comment = True
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if in_single or in_double:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
             depth -= 1
             if depth == 0:
-                location_matches.append((lm.start(), i + 1))
-                break
+                return i + 1
+    raise RuntimeError('unbalanced nginx braces')
 
-if location_matches:
-    ls, le = location_matches[0]
-    new_chunk = chunk[:ls] + PROXY + chunk[le:]
-else:
-    closing = chunk.rfind('}')
-    new_chunk = chunk[:closing] + '\n' + PROXY + chunk[closing:]
 
-path.write_text(text[:s] + new_chunk + text[e:], encoding='utf-8')
+def find_blocks(text: str, start_re: re.Pattern[str]) -> list[tuple[int, int]]:
+    blocks: list[tuple[int, int]] = []
+    for match in start_re.finditer(text):
+        open_i = text.find('{', match.start(), match.end())
+        if open_i < 0:
+            continue
+        try:
+            end = matching_brace(text, open_i)
+        except RuntimeError:
+            continue
+        blocks.append((match.start(), end))
+    return blocks
+
+
+def target_server(text: str) -> tuple[int, int]:
+    matches: list[tuple[int, int]] = []
+    for start, end in find_blocks(text, server_start_re):
+        chunk = text[start:end]
+        if listen_re.search(chunk):
+            matches.append((start, end))
+    if len(matches) != 1:
+        raise SystemExit(f'Expected exactly one server block listening on {public_port}, found {len(matches)}')
+    return matches[0]
+
+
+def resolve_include(pattern: str, parent: Path) -> list[Path]:
+    raw = pattern.strip().strip('"\'')
+    if not raw or '$' in raw:
+        return []
+    p = Path(raw)
+    if not p.is_absolute():
+        p = (parent.parent / p).resolve()
+    return [Path(x).resolve() for x in glob.glob(str(p)) if Path(x).is_file()]
+
+
+def collect_includes_from_text(text: str, parent: Path) -> list[Path]:
+    result: list[Path] = []
+    for m in include_re.finditer(text):
+        result.extend(resolve_include(m.group(1), parent))
+    return result
+
+
+def walk_includes(seed: list[Path]) -> list[Path]:
+    out: list[Path] = []
+    seen: set[Path] = set()
+    queue = list(seed)
+    while queue and len(seen) < 120:
+        path = queue.pop(0)
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        out.append(path)
+        try:
+            text = path.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        queue.extend(collect_includes_from_text(text, path))
+    return out
+
+
+def root_blocks(text: str) -> list[tuple[int, int]]:
+    return find_blocks(text, location_root_re)
+
+
+def backup_and_write(path: Path, new_text: str) -> None:
+    old_text = path.read_text(encoding='utf-8')
+    if old_text == new_text:
+        return
+    backup = txn_dir / f'{len(list(txn_dir.glob("*.bak"))):03d}-{path.name}.bak'
+    shutil.copy2(path, backup)
+    with manifest.open('a', encoding='utf-8') as fh:
+        fh.write(f'{path}\t{backup}\n')
+    path.write_text(new_text, encoding='utf-8')
+    print(f'[Project5][PROXY] 修改来源：{path}')
+
+
+main_text = main.read_text(encoding='utf-8')
+srv_start, srv_end = target_server(main_text)
+server_text = main_text[srv_start:srv_end]
+
+# 1) If an earlier successful Project5 marker already exists in the target server,
+# replace that exact block idempotently.
+marker = marker_re.search(server_text)
+if marker:
+    abs_start = srv_start + marker.start()
+    abs_end = srv_start + marker.end()
+    backup_and_write(main, main_text[:abs_start] + PROXY + main_text[abs_end:])
+    raise SystemExit(0)
+
+# 2) Prefer an ordinary root location directly inside this server block.
+direct_roots = root_blocks(server_text)
+if len(direct_roots) == 1:
+    ls, le = direct_roots[0]
+    backup_and_write(main, main_text[:srv_start + ls] + PROXY + main_text[srv_start + le:])
+    raise SystemExit(0)
+if len(direct_roots) > 1:
+    raise SystemExit(f'Ambiguous: target server already has {len(direct_roots)} direct location / blocks')
+
+# 3) BaoTa commonly puts location / in an included proxy file. Follow only includes
+# referenced by the selected server block, recursively, and replace the real source.
+seed = collect_includes_from_text(server_text, main)
+include_files = walk_includes(seed)
+include_roots: list[tuple[Path, int, int, str]] = []
+for path in include_files:
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError:
+        continue
+    for ls, le in root_blocks(text):
+        include_roots.append((path, ls, le, text))
+
+if len(include_roots) == 1:
+    path, ls, le, text = include_roots[0]
+    backup_and_write(path, text[:ls] + PROXY + text[le:])
+    raise SystemExit(0)
+if len(include_roots) > 1:
+    sources = ', '.join(str(x[0]) for x in include_roots[:6])
+    raise SystemExit(f'Ambiguous: found {len(include_roots)} included location / blocks: {sources}')
+
+# 4) No root route exists anywhere reachable from this server: insert one into the
+# selected server block. This is safe because recursive include inspection found no
+# competing location / definition.
+closing = server_text.rfind('}')
+if closing < 0:
+    raise SystemExit('Could not find target server closing brace')
+new_server = server_text[:closing] + '\n' + PROXY + server_text[closing:]
+backup_and_write(main, main_text[:srv_start] + new_server + main_text[srv_end:])
 PY
+
+restore_transaction() {
+  if [ ! -s "$MANIFEST" ]; then
+    return 0
+  fi
+  while IFS=$'\t' read -r original backup; do
+    [ -n "$original" ] || continue
+    [ -f "$backup" ] || continue
+    cp -a "$backup" "$original"
+  done < "$MANIFEST"
+}
 
 NGINX_BIN=""
 for candidate in /www/server/nginx/sbin/nginx nginx; do
-  if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then NGINX_BIN="$candidate"; break; fi
+  if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
+    NGINX_BIN="$candidate"
+    break
+  fi
 done
 
 if [ -z "$NGINX_BIN" ]; then
   echo "[Project5][PROXY][ERROR] 找不到 nginx 命令，恢复原配置"
-  cp -a "$BACKUP" "$CANDIDATE"
+  restore_transaction
   exit 4
 fi
 
 if ! "$NGINX_BIN" -t; then
-  echo "[Project5][PROXY][ERROR] nginx -t 失败，恢复原配置"
-  cp -a "$BACKUP" "$CANDIDATE"
+  echo "[Project5][PROXY][ERROR] nginx -t 失败，恢复本次修改"
+  restore_transaction
   "$NGINX_BIN" -t || true
   exit 5
 fi
