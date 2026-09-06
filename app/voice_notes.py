@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 from fastapi import Depends, HTTPException
@@ -87,3 +88,20 @@ if ROUTES_REGISTERED:
                 conn.execute("DELETE FROM voice_notes WHERE engine=? AND voice=?", (engine, voice))
 
         return _notes_payload(engine)
+
+    @app.get("/deploy-version")
+    def deploy_version() -> dict:
+        return {
+            "service": "project5",
+            "commit": os.getenv("PROJECT5_COMMIT", "unknown"),
+            "ui": "manual-preview-voice-notes-v1",
+        }
+
+    @app.middleware("http")
+    async def voice_note_cache_headers(request, call_next):
+        response = await call_next(request)
+        if request.url.path in {"/static/preview-admin.js", "/deploy-version"}:
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
