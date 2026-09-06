@@ -11,18 +11,10 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent.parent
 REPO_ID = "hexgrad/Kokoro-82M-v1.1-zh"
 SAMPLE_RATE = 24000
-
-# IMPORTANT:
-# The INT8 export uses GemmInteger nodes. The current CPUExecutionProvider on the
-# Project5 server reports NOT_IMPLEMENTED for GemmInteger(10), so the INT8 graph
-# cannot even be initialized on that machine. Use the full-precision ONNX export
-# as the compatibility baseline. It is larger, but it avoids the unsupported INT8
-# operator and is still very reasonable for an 8 GB CPU server.
 MODEL_PATH = Path(os.getenv("KOKORO_ONNX_MODEL", ROOT / "models" / "kokoro-v1.1-zh.onnx"))
 VOICES_PATH = Path(os.getenv("KOKORO_ONNX_VOICES", ROOT / "models" / "voices-v1.1-zh.bin"))
 CONFIG_PATH = Path(os.getenv("KOKORO_ONNX_CONFIG", ROOT / "models" / "config.json"))
 
-# Kokoro-82M-v1.1-zh Chinese voices. zf = female, zm = male.
 CHINESE_VOICES = [
     "zf_001", "zf_002", "zf_003", "zf_004", "zf_005", "zf_006", "zf_007", "zf_008",
     "zf_017", "zf_018", "zf_019", "zf_021", "zf_022", "zf_023", "zf_024", "zf_026",
@@ -49,7 +41,6 @@ def voice_meta(voice: str) -> dict:
 
 
 def available_cpu_count() -> int:
-    """Return CPUs actually available to this process (cgroup/affinity aware)."""
     try:
         return max(1, len(os.sched_getaffinity(0)))
     except (AttributeError, OSError):
@@ -57,31 +48,24 @@ def available_cpu_count() -> int:
 
 
 class KokoroEngine:
-    """CPU Kokoro engine using FP32 ONNX and an explicit multi-core ORT session.
+    """Upstream-compatible Kokoro v1.1-zh FP32 CPU engine.
 
-    The previous INT8 model failed during ONNX Runtime initialization with:
-    `NOT_IMPLEMENTED: Could not find an implementation for GemmInteger(10)`.
-    That is an execution-provider/operator compatibility problem, not a lack of
-    CPU cores. This engine switches to the FP32 export and then explicitly assigns
-    multiple CPU threads to ONNX Runtime so a single synthesis can use the server's
-    available cores.
+    Stability first: instantiate Kokoro exactly like the upstream Chinese example.
+    ONNX Runtime's CPU provider owns its normal internal thread pool. Project5 keeps
+    one model instance in one Uvicorn worker so the model is not duplicated in RAM.
     """
 
     def __init__(self) -> None:
         self.model = None
         self.g2p = None
-        self.session = None
         self.loaded = False
         self.loading = False
         self.load_error: str | None = None
         self.device = "cpu"
-        self.backend = "onnx-fp32-multicore"
-
+        self.backend = "onnx-fp32-upstream"
         cpu_count = available_cpu_count()
         requested_threads = int(os.getenv("KOKORO_THREADS", str(min(8, cpu_count))))
         self.threads = max(1, min(requested_threads, cpu_count))
-        self.inter_threads = max(1, int(os.getenv("KOKORO_INTER_THREADS", "1")))
-
         self.last_metrics: dict = {}
         self.load_metrics: dict = {}
         self._load_lock = threading.Lock()
@@ -89,20 +73,13 @@ class KokoroEngine:
     def load(self) -> None:
         if self.loaded:
             return
-
         with self._load_lock:
             if self.loaded:
                 return
-
             self.loading = True
             self.load_error = None
             started = time.perf_counter()
-            print(
-                f"[Project5] Loading Kokoro FP32 ONNX: {MODEL_PATH} "
-                f"intra_threads={self.threads} inter_threads={self.inter_threads}",
-                flush=True,
-            )
-
+            print(f"[Project5] Loading upstream Kokoro FP32: {MODEL_PATH}", flush=True)
             try:
                 missing = [str(path) for path in (MODEL_PATH, VOICES_PATH, CONFIG_PATH) if not path.exists()]
                 if missing:
@@ -110,65 +87,34 @@ class KokoroEngine:
                         "Kokoro ONNX files are missing: " + ", ".join(missing) + ". Run scripts/auto-deploy.sh."
                     )
 
-                # Thread hints for libraries used below. The actual ONNX Runtime
-                # thread pool is configured explicitly via SessionOptions.
+                # Keep common CPU math libraries aware of the server budget. Kokoro's
+                # own normal constructor creates the ONNX Runtime session, matching the
+                # upstream Chinese example instead of Project5 maintaining a custom graph loader.
                 os.environ["OMP_NUM_THREADS"] = str(self.threads)
-                os.environ["OMP_WAIT_POLICY"] = "ACTIVE"
+                os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
 
-                import onnxruntime as ort
                 from kokoro_onnx import Kokoro
                 from misaki.zh import ZHG2P
 
-                options = ort.SessionOptions()
-                options.intra_op_num_threads = self.threads
-                options.inter_op_num_threads = self.inter_threads
-                options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                options.enable_cpu_mem_arena = True
-                options.enable_mem_pattern = True
-                try:
-                    # Keep worker threads hot while a synthesis request is running.
-                    options.add_session_config_entry("session.intra_op.allow_spinning", "1")
-                except Exception:
-                    pass
-
-                session_started = time.perf_counter()
-                self.session = ort.InferenceSession(
-                    str(MODEL_PATH),
-                    sess_options=options,
-                    providers=["CPUExecutionProvider"],
-                )
-                session_seconds = time.perf_counter() - session_started
-
                 self.g2p = ZHG2P(version="1.1")
-                self.model = Kokoro.from_session(
-                    self.session,
+                self.model = Kokoro(
+                    str(MODEL_PATH),
                     str(VOICES_PATH),
                     vocab_config=str(CONFIG_PATH),
                 )
-
-                # Readiness means model/session/G2P were constructed successfully.
-                # Do not make an expensive warm-up a startup requirement.
                 self.loaded = True
                 elapsed = time.perf_counter() - started
                 self.load_metrics = {
                     "backend": self.backend,
                     "threads": self.threads,
-                    "inter_threads": self.inter_threads,
-                    "session_ms": round(session_seconds * 1000),
                     "total_ms": round(elapsed * 1000),
                 }
-                print(
-                    f"[Project5] Kokoro FP32 ready in {elapsed:.2f}s "
-                    f"session={session_seconds:.2f}s threads={self.threads}",
-                    flush=True,
-                )
+                print(f"[Project5] Kokoro FP32 ready in {elapsed:.2f}s", flush=True)
             except Exception as exc:
                 self.load_error = f"{type(exc).__name__}: {exc}"
                 self.loaded = False
                 self.model = None
-                self.session = None
-                print(f"[Project5] Kokoro ONNX load failed: {self.load_error}", flush=True)
+                print(f"[Project5] Kokoro load failed: {self.load_error}", flush=True)
                 raise
             finally:
                 self.loading = False
@@ -182,17 +128,14 @@ class KokoroEngine:
         try:
             self.load()
         except Exception:
-            # load_error is preserved for /runtime and the admin console.
             pass
 
     @staticmethod
     def _split_text(text: str, max_chars: int = 180) -> Iterable[str]:
-        """Split long Chinese text at punctuation while avoiding huge CPU batches."""
         text = re.sub(r"\s+", " ", text).strip()
         if len(text) <= max_chars:
             yield text
             return
-
         parts = re.split(r"(?<=[。！？!?；;，,、\n])", text)
         current = ""
         for part in parts:
@@ -279,7 +222,6 @@ class KokoroEngine:
             "voice": voice,
             "speed": float(speed),
             "threads": self.threads,
-            "inter_threads": self.inter_threads,
             "g2p_ms": round(g2p_seconds * 1000),
             "inference_ms": round(inference_seconds * 1000),
             "write_ms": round(write_seconds * 1000),
