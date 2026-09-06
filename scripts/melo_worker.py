@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 import wave
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +27,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 MODEL = None
 MODEL_ERROR: str | None = None
 MODEL_LOCK = threading.Lock()
+SYNTH_LOCK = threading.Lock()
 MODEL_LOADED_AT: float | None = None
 SPEAKER_ID = None
 
@@ -83,7 +84,7 @@ def ensure_model():
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Project5Melo/1.0"
+    server_version = "Project5Melo/1.1"
 
     def log_message(self, fmt: str, *args) -> None:
         print("[Project5][Melo][HTTP] " + (fmt % args), flush=True)
@@ -101,6 +102,7 @@ class Handler(BaseHTTPRequestHandler):
             "device": "cpu",
             "threads": max(1, int(os.getenv("MELO_THREADS", "4"))),
             "loaded_at": MODEL_LOADED_AT,
+            "busy": SYNTH_LOCK.locked(),
         })
 
     def do_POST(self) -> None:
@@ -127,13 +129,14 @@ class Handler(BaseHTTPRequestHandler):
             output = AUDIO_DIR / filename
             output.unlink(missing_ok=True)
 
-            model = ensure_model()
-            started = time.perf_counter()
-            model.tts_to_file(text, SPEAKER_ID, str(output), speed=speed, quiet=True)
-            if not output.exists() or output.stat().st_size <= 44:
-                raise RuntimeError("MeloTTS did not produce a valid WAV")
-            duration = _duration(output)
-            elapsed = time.perf_counter() - started
+            with SYNTH_LOCK:
+                model = ensure_model()
+                started = time.perf_counter()
+                model.tts_to_file(text, SPEAKER_ID, str(output), speed=speed, quiet=True)
+                if not output.exists() or output.stat().st_size <= 44:
+                    raise RuntimeError("MeloTTS did not produce a valid WAV")
+                duration = _duration(output)
+                elapsed = time.perf_counter() - started
             _json(self, 200, {
                 "ok": True,
                 "filename": filename,
@@ -143,10 +146,7 @@ class Handler(BaseHTTPRequestHandler):
                 "model_loaded": MODEL is not None,
             })
         except Exception as exc:
-            _json(self, 500, {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            })
+            _json(self, 500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
 def main() -> None:
@@ -154,7 +154,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.getenv("MELO_PORT", "8016")))
     args = parser.parse_args()
-    server = HTTPServer((args.host, args.port), Handler)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server.daemon_threads = True
     print(f"[Project5][Melo] service http://{args.host}:{args.port}", flush=True)
     server.serve_forever()
 
