@@ -51,12 +51,29 @@ zh-TW-YunJheNeural
 
 ## 2. 连接配置
 
-当前业务项目应通过环境变量读取：
+当前 Project5 公网请求基地址是：
 
 ```text
-PROJECT5_BASE_URL=http://YOUR_PROJECT5_HOST
+http://186.244.245.177:28442
+```
+
+业务项目通过环境变量读取：
+
+```text
+PROJECT5_BASE_URL=http://186.244.245.177:28442
 PROJECT5_API_KEY=YOUR_API_KEY
 ```
+
+因此公开接口的完整请求地址是：
+
+```text
+POST http://186.244.245.177:28442/v1/audio/speech
+GET  http://186.244.245.177:28442/v1/tasks/{task_id}
+GET  http://186.244.245.177:28442/v1/voices?engine=edge
+GET  http://186.244.245.177:28442/v1/voices?engine=kokoro
+```
+
+如果以后 Project5 绑定了新的正式域名，只修改 `PROJECT5_BASE_URL` 即可，后面的接口路径不变。
 
 所有需要认证的公开 API 都带：
 
@@ -86,19 +103,19 @@ Content-Type: application/json
 ### 获取 Edge 音色
 
 ```http
-GET /v1/voices?engine=edge
+GET http://186.244.245.177:28442/v1/voices?engine=edge
 ```
 
 ### 获取 Kokoro 音色
 
 ```http
-GET /v1/voices?engine=kokoro
+GET http://186.244.245.177:28442/v1/voices?engine=kokoro
 ```
 
 ### 提交 TTS 任务
 
 ```http
-POST /v1/audio/speech
+POST http://186.244.245.177:28442/v1/audio/speech
 Authorization: Bearer YOUR_API_KEY
 Content-Type: application/json
 ```
@@ -117,7 +134,7 @@ Content-Type: application/json
 ### 查询任务
 
 ```http
-GET /v1/tasks/{task_id}
+GET http://186.244.245.177:28442/v1/tasks/{task_id}
 Authorization: Bearer YOUR_API_KEY
 ```
 
@@ -185,7 +202,7 @@ failed
 不要只解释 API，也不要只给伪代码。请继续在用户当前项目里完成接入：
 
 1. **先检查项目结构**：确认当前项目使用 Python、Node.js、Java、Go 或其他语言，以及现有 HTTP 客户端和配置方式。
-2. **加入环境变量**：增加 `PROJECT5_BASE_URL` 和 `PROJECT5_API_KEY`，遵守当前项目已有的配置规范。
+2. **加入环境变量**：增加 `PROJECT5_BASE_URL=http://186.244.245.177:28442` 和 `PROJECT5_API_KEY`，遵守当前项目已有的配置规范。
 3. **封装客户端**：至少实现下面三个能力：
 
 ```text
@@ -248,7 +265,7 @@ import os
 import time
 import requests
 
-BASE_URL = os.environ["PROJECT5_BASE_URL"].rstrip("/")
+BASE_URL = os.environ.get("PROJECT5_BASE_URL", "http://186.244.245.177:28442").rstrip("/")
 API_KEY = os.environ["PROJECT5_API_KEY"]
 AUTH = {"Authorization": f"Bearer {API_KEY}"}
 
