@@ -8,6 +8,8 @@ __pycache__/
 .requirements.sha256
 .huggingface/
 .cache/
+models/*
+!models/.gitkeep
 data/project5.db
 data/project5.db-*
 data/audio/*
