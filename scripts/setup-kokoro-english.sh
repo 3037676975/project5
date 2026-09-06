@@ -96,19 +96,20 @@ ADMIN_KEY="${ADMIN_KEY:-}"
 READY=0
 for _ in {1..180}; do
   RUNTIME="$(curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/runtime" 2>/dev/null || true)"
-  if printf '%s' "$RUNTIME" | grep -q 'misaki-en-g2p+espeak-fallback'; then
+  if printf '%s' "$RUNTIME" | grep -q 'misaki-en-g2p+espeak-fallback' \
+    && printf '%s' "$RUNTIME" | grep -q 'soft-join-v1'; then
     READY=1
     break
   fi
   sleep 1
 done
 [ "$READY" -eq 1 ] || {
-  echo '[Kokoro-English][ERROR] API 重启后没有启用官方 Misaki English G2P';
+  echo '[Kokoro-English][ERROR] API 重启后没有启用官方 English G2P + soft-join-v1';
   tail -n 120 logs/app.log || true;
   exit 1;
 }
 
-echo '[Kokoro-English] 真实生成纯英文 + 中英混合 WAV'
+echo '[Kokoro-English] 真实生成纯英文 + 多次中英切换 WAV'
 [ -n "$ADMIN_KEY" ] || { echo '[Kokoro-English][ERROR] ADMIN_KEY 缺失'; exit 1; }
 
 run_case() {
@@ -142,6 +143,19 @@ PY
 }
 
 run_case 'Have you ever wondered how AI-generated voices work? Open-source TTS models are becoming surprisingly powerful.' '纯英文'
-run_case '今天我们测试 OpenAI、ChatGPT、LangChain、RAG、Agent、MCP、LLM 和 API，然后继续学习。' '中英混合'
+run_case '嗨，今天聊点轻松的。I really like simple tools that just work. 最近我在用 ChatGPT 和 LangChain 做 AI 小工具，and it feels pretty useful. 好，我们继续吧。' '多次中英切换'
 
-echo '[Kokoro-English][OK] 官方英文 G2P + 纯英文 + 中英混合真实生成全部通过'
+echo '[Kokoro-English][OK] 官方英文 G2P + soft-join + 真实生成全部通过'
+
+# Build one fixed bilingual preview per voice in the background. This is deliberately
+# outside the deployment success path: the site is usable immediately, while the
+# 103 Kokoro + Edge voice previews fill in gradually and are cached permanently.
+PREVIEW_LOG="$PROJECT_DIR/logs/voice-preview.log"
+if command -v nice >/dev/null 2>&1; then
+  nohup nice -n 10 "$PY" "$PROJECT_DIR/scripts/build-voice-previews.py" >> "$PREVIEW_LOG" 2>&1 < /dev/null &
+else
+  nohup "$PY" "$PROJECT_DIR/scripts/build-voice-previews.py" >> "$PREVIEW_LOG" 2>&1 < /dev/null &
+fi
+PREVIEW_PID=$!
+disown "$PREVIEW_PID" 2>/dev/null || true
+echo "[Kokoro-English] 固定音色试听缓存已后台启动 pid=${PREVIEW_PID}，日志：logs/voice-preview.log"
