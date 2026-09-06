@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# Project5 fast deploy entry for BaoTa Git auto-deploy.
-# Important: BaoTa may mark scripts that run for ~60s as failed. Large model files
-# and pip installs are therefore handled by bootstrap-runtime.sh in the background.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 mkdir -p logs data/audio models
 
-echo "=============================================="
-echo " Project5 · Fast Auto Deploy"
-echo "=============================================="
+printf '%s\n' '=============================================='
+printf '%s\n' ' Project5 · Fast Auto Deploy'
+printf '%s\n' '=============================================='
 
 PYTHON_BIN=""
 for candidate in python3.12 python3.11 python3.10 python3; do
@@ -20,13 +17,15 @@ for candidate in python3.12 python3.11 python3.10 python3; do
   fi
 done
 if [ -z "$PYTHON_BIN" ]; then
-  echo "[ERROR] 需要 Python 3.10+"
+  echo '[ERROR] 需要 Python 3.10+'
   exit 1
 fi
 
 echo "[1/3] Python: $($PYTHON_BIN --version)"
 
-MODEL_FILE="models/kokoro-v1.1-zh.int8.onnx"
+# Project5 intentionally uses the FP32 export on this server. The INT8 export
+# fails in CPUExecutionProvider with NOT_IMPLEMENTED / GemmInteger(10).
+MODEL_FILE="models/kokoro-v1.1-zh.onnx"
 VOICES_FILE="models/voices-v1.1-zh.bin"
 CONFIG_FILE="models/config.json"
 REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')"
@@ -34,79 +33,89 @@ OLD_HASH="$(cat .requirements.sha256 2>/dev/null || true)"
 
 file_ready() {
   local path="$1" min_bytes="$2" size=0
-  if [ -f "$path" ]; then size="$(stat -c%s "$path" 2>/dev/null || echo 0)"; fi
+  [ -f "$path" ] && size="$(stat -c%s "$path" 2>/dev/null || echo 0)"
   [ "$size" -ge "$min_bytes" ]
 }
+
+set_env_value() {
+  local key="$1" value="$2"
+  if grep -q "^${key}=" .env 2>/dev/null; then
+    sed -i "s#^${key}=.*#${key}=${value}#" .env
+  else
+    printf '%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+
+ensure_env() {
+  if [ ! -f .env ]; then
+    local admin_key
+    admin_key="admin-p5-$($PYTHON_BIN -c 'import secrets; print(secrets.token_urlsafe(32))')"
+    cat > .env <<EOF
+PROJECT5_PORT=8005
+ADMIN_KEY=${admin_key}
+KOKORO_THREADS=8
+KOKORO_INTER_THREADS=1
+KOKORO_ONNX_MODEL=${PROJECT_DIR}/${MODEL_FILE}
+KOKORO_ONNX_VOICES=${PROJECT_DIR}/${VOICES_FILE}
+KOKORO_ONNX_CONFIG=${PROJECT_DIR}/${CONFIG_FILE}
+MAX_TEXT_LENGTH=5000
+EOF
+  fi
+
+  # Migrate existing installs away from the incompatible INT8 model without
+  # touching ADMIN_KEY or other user settings.
+  set_env_value KOKORO_THREADS 8
+  set_env_value KOKORO_INTER_THREADS 1
+  set_env_value KOKORO_ONNX_MODEL "${PROJECT_DIR}/${MODEL_FILE}"
+  set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/${VOICES_FILE}"
+  set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/${CONFIG_FILE}"
+  chmod 600 .env
+}
+
+ensure_env
 
 RUNTIME_READY=1
 [ -x .venv/bin/python ] || RUNTIME_READY=0
 [ "$REQ_HASH" = "$OLD_HASH" ] || RUNTIME_READY=0
-file_ready "$MODEL_FILE" 100000000 || RUNTIME_READY=0
+file_ready "$MODEL_FILE" 300000000 || RUNTIME_READY=0
 file_ready "$VOICES_FILE" 53000000 || RUNTIME_READY=0
 file_ready "$CONFIG_FILE" 1000 || RUNTIME_READY=0
 if [ "$RUNTIME_READY" -eq 1 ] && ! .venv/bin/python -c 'import kokoro_onnx, onnxruntime; from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null 2>&1; then
   RUNTIME_READY=0
 fi
 
-ensure_env() {
-  if [ -f .env ]; then return 0; fi
-  local admin_key
-  admin_key="admin-p5-$($PYTHON_BIN -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  cat > .env <<EOF
-PROJECT5_PORT=8005
-ADMIN_KEY=${admin_key}
-KOKORO_THREADS=8
-KOKORO_ONNX_MODEL=${PROJECT_DIR}/models/kokoro-v1.1-zh.int8.onnx
-KOKORO_ONNX_VOICES=${PROJECT_DIR}/models/voices-v1.1-zh.bin
-KOKORO_ONNX_CONFIG=${PROJECT_DIR}/models/config.json
-MAX_TEXT_LENGTH=5000
-EOF
-  chmod 600 .env
-  echo "[2/3] 已创建 .env"
-}
-
-ensure_env
-
 if [ "$RUNTIME_READY" -eq 0 ]; then
-  echo "[2/3] 运行环境尚未全部就绪或中文 G2P 需要修复。"
-  echo "      大模型/依赖修复不阻塞宝塔 Webhook，而是在后台继续准备。"
-
+  echo '[2/3] FP32 模型或运行环境尚未就绪，后台准备资源。'
   BOOT_PID_FILE="logs/bootstrap.pid"
   if [ -f "$BOOT_PID_FILE" ] && kill -0 "$(cat "$BOOT_PID_FILE")" 2>/dev/null; then
-    echo "[3/3] 后台初始化已在运行 PID=$(cat "$BOOT_PID_FILE")"
+    echo "[3/3] 后台初始化已运行 PID=$(cat "$BOOT_PID_FILE")"
   else
     nohup bash scripts/bootstrap-runtime.sh >> logs/bootstrap.log 2>&1 &
     BOOT_PID=$!
     echo "$BOOT_PID" > "$BOOT_PID_FILE"
     echo "[3/3] 已启动后台初始化 PID=${BOOT_PID}"
   fi
-
-  echo "[OK] Webhook 快速返回。初始化/修复进度："
-  echo "     tail -f $PROJECT_DIR/logs/bootstrap.log"
-  echo "完成后脚本会自动重启 Project5，无需重复点部署。"
+  echo "[OK] 宝塔 Webhook 先返回；进度：tail -f $PROJECT_DIR/logs/bootstrap.log"
   exit 0
 fi
 
-echo "[2/3] 依赖、模型、103 音色包、中文 G2P 均已就绪"
-echo "[3/3] 轻量重启 Project5"
+echo '[2/3] FP32 模型、103 音色包、依赖均已就绪'
+echo '[3/3] 重启 Project5'
 bash scripts/restart.sh
 
 set -a
 source .env
 set +a
 PORT="${PROJECT5_PORT:-8005}"
-# BaoTa path stays fast: wait briefly for the model preload. If it needs longer,
-# report that clearly instead of claiming a false model-ready success.
-for i in {1..35}; do
-  if .venv/bin/python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:${PORT}/health', timeout=2)); raise SystemExit(0 if d.get('model_loaded') is True else 1)" >/dev/null 2>&1; then
+for i in {1..45}; do
+  if .venv/bin/python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:${PORT}/runtime', timeout=2)); raise SystemExit(0 if d.get('state') == 'ready' else 1)" >/dev/null 2>&1; then
     echo "Deploy success: $(date '+%Y-%m-%d %H:%M:%S')" >> logs/deploy.log
-    echo "[SUCCESS] Project5 模型已就绪：http://127.0.0.1:${PORT}"
+    echo "[SUCCESS] Project5 FP32 多核模型已就绪：http://127.0.0.1:${PORT}"
     exit 0
   fi
   sleep 1
 done
 
-echo "[WARN] FastAPI 已启动，但模型尚未在 35 秒内完成预热。"
-echo "       可查看：tail -f $PROJECT_DIR/logs/app.log"
-echo "       后台页面仍可打开，等 /health 的 model_loaded=true 后再生成。"
+echo '[WARN] Web 服务已启动，但模型尚未在 45 秒内完成加载。'
+echo "查看：tail -f $PROJECT_DIR/logs/app.log"
 exit 0
