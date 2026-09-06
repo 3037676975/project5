@@ -37,7 +37,7 @@ else
   echo "[2/6] espeak-ng 已安装"
 fi
 if ! command -v espeak-ng >/dev/null 2>&1; then
-  echo "[WARN] espeak-ng 尚未安装。控制台可以启动，但 TTS 生成可能失败。"
+  echo "[WARN] espeak-ng 尚未安装。控制台可以启动，但含英文的 TTS 生成可能失败。"
 fi
 
 # 3) 独立虚拟环境，只在第一次创建
@@ -48,6 +48,12 @@ else
   echo "[3/6] 复用现有 .venv"
 fi
 .venv/bin/python -m pip install -q --upgrade pip setuptools wheel
+
+# 无 GPU 服务器优先安装 CPU-only PyTorch，避免拉取 CUDA/NVIDIA 大包。
+if ! .venv/bin/python -c 'import torch' >/dev/null 2>&1; then
+  echo "[3/6] 安装 CPU-only PyTorch"
+  .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+fi
 
 # 4) requirements.txt 没变化就不重复安装，避免每次部署都重装模型依赖
 REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')"
