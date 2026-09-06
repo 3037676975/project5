@@ -43,6 +43,7 @@ jobs:
           node --check /tmp/project5-console-v2.js
           node --check app/static/preview-admin.js
           node --check app/static/voice-library.js
+          node --check app/static/api-docs-beginner.js
 
       - name: Voice library and retention frontend
         run: |
@@ -57,6 +58,19 @@ jobs:
           grep -q 'Project5 双引擎 API' app/static/voice-library.js
           grep -q '/v1/audio/speech' app/static/voice-library.js
           grep -q '/v1/voices?engine=kokoro' app/static/voice-library.js
+
+      - name: Beginner API docs and ETG1 recommendation
+        run: |
+          grep -q 'api-docs-beginner.js' app/voice_notes.py
+          grep -q 'beginner-api-guide-etg1-default' app/voice_notes.py
+          grep -q 'zh-TW-YunJheNeural' app/static/api-docs-beginner.js
+          grep -q 'speed = 1.10' app/static/api-docs-beginner.js
+          grep -q '一键复制给 AI' app/static/api-docs-beginner.js
+          grep -q '你读完以后必须实际完成这些工作' app/static/api-docs-beginner.js
+          grep -q 'zh-TW-YunJheNeural' API_DOCS.md
+          grep -q '1.10' API_DOCS.md
+          grep -q '你读完这份上下文以后，必须实际完成这些工作' AI_API_CONTEXT.md
+          grep -q 'API 中文小白教程' app/static/api-guide-zh.html
 
       - name: Retention backend and deployment handoff
         run: |
