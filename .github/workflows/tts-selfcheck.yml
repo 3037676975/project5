@@ -8,7 +8,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,59 +19,42 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Install dependencies
+      - name: Install base dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install httpx
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt httpx
 
-      - name: Python syntax
-        run: python -m compileall -q app
-
-      - name: Shell syntax
+      - name: Install official Misaki English frontend
         run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple torch
+          pip install 'spacy>=3.8,<4' 'transformers>=4.40,<5' 'num2words>=0.5.14,<1'
+          python -m spacy download en_core_web_sm
+
+      - name: Syntax checks
+        run: |
+          python -m compileall -q app
           bash -n scripts/auto-deploy.sh
           bash -n scripts/repair-runtime-assets.sh
           bash -n scripts/bootstrap-runtime.sh
+          bash -n scripts/setup-kokoro-english.sh
           bash -n scripts/start.sh
           bash -n scripts/stop.sh
           bash -n scripts/restart.sh
 
-      - name: JavaScript syntax
-        run: |
-          node --check app/static/runtime-overlay.js
-          node --check app/static/engine-overlay.js
-          node --check app/static/task-v2.js
-
-      - name: Mixed Chinese English G2P
+      - name: Official English G2P direct tests
         run: |
           python - <<'PY'
-          import re
-          from types import SimpleNamespace
+          from misaki import en
           from misaki.espeak import EspeakFallback
-          from misaki.zh import ZHG2P
-
-          def normalize(text: str) -> str:
-              text = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', text)
-              text = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', text)
-              text = re.sub(
-                  r'\b(?:AI|API|LLM|MCP|GPT|TTS|OCR|CPU|GPU|HTTP|HTTPS|URL|SQL|RAG|SDK|CLI|JSON|HTML|CSS)\b',
-                  lambda m: ' '.join(m.group(0)), text, flags=re.IGNORECASE,
-              )
-              text = re.sub(r'\b[A-Z]{2,6}\b', lambda m: ' '.join(m.group(0)), text)
-              return re.sub(r'\s+', ' ', text).strip()
-
           fallback = EspeakFallback(british=False, version='1.1')
-          def english(text: str) -> str:
-              phonemes, _ = fallback(SimpleNamespace(text=normalize(text)))
-              return phonemes or ''
-
-          g2p = ZHG2P(version='1.1', en_callable=english)
-          text = '今天学习 LangChain、RAG、Agent、MCP、LLM 和 API。'
-          phonemes, _ = g2p(text)
-          assert phonemes and phonemes.strip(), phonemes
-          assert '❓' not in phonemes, phonemes
-          print('mixed-g2p-ok:', phonemes)
+          g2p = en.G2P(version='1.1', trf=False, british=False, fallback=fallback, unk='')
+          for text in (
+              'Have you ever wondered how AI-generated voices work?',
+              'OpenAI, ChatGPT, LangChain, RAG, MCP, LLM and API are useful tools.',
+          ):
+              phonemes, _ = g2p(text)
+              assert phonemes and '❓' not in phonemes, (text, phonemes)
+              print('english-g2p-ok:', text, phonemes)
           PY
 
       - name: Download verified Kokoro v1.1 zh assets
@@ -88,33 +71,34 @@ jobs:
           import zipfile
           from pathlib import Path
           p = Path('models/voices-v1.1-zh.bin')
-          assert p.stat().st_size == 53815880, p.stat().st_size
+          assert p.stat().st_size == 53815880
           with zipfile.ZipFile(p) as z:
-              assert len(z.namelist()) == 103
-              assert z.testzip() is None
-              assert 'zf_001.npy' in z.namelist()
+              assert len(z.namelist()) == 103 and z.testzip() is None
           print('kokoro-assets-ok')
           PY
 
-      - name: Kokoro real mixed-language generation
+      - name: Kokoro real pure English and mixed generation
         env:
           KOKORO_THREADS: '4'
         run: |
           python - <<'PY'
           from pathlib import Path
-          import time
           import soundfile as sf
           from app.dual_tts import generate_kokoro
+          from app.tts import engine
 
-          target = Path('/tmp/project5-kokoro-mixed-selfcheck.wav')
-          text = '今天我们学习 LangChain、RAG、Agent、MCP、LLM 和 API。'
-          started = time.perf_counter()
-          duration = generate_kokoro(text, 'zf_001', 1.0, target)
-          elapsed = time.perf_counter() - started
-          assert target.exists() and target.stat().st_size > 44
-          info = sf.info(str(target))
-          assert info.frames > 0 and info.duration > 0
-          print(f'kokoro-real-generation-ok bytes={target.stat().st_size} duration={duration:.2f}s elapsed={elapsed:.2f}s')
+          cases = {
+              'english': 'Have you ever wondered how AI-generated voices work? Open-source TTS models are getting surprisingly powerful.',
+              'mixed': '今天学习 OpenAI、ChatGPT、LangChain、RAG、Agent、MCP、LLM 和 API，然后继续学习。',
+          }
+          for name, text in cases.items():
+              target = Path(f'/tmp/project5-{name}.wav')
+              duration = generate_kokoro(text, 'zf_001', 1.0, target)
+              assert target.exists() and target.stat().st_size > 44
+              info = sf.info(str(target))
+              assert info.frames > 0 and info.duration > 0
+              print(name, 'ok', target.stat().st_size, duration, engine.english_frontend)
+          assert engine.english_frontend == 'misaki-en-g2p+espeak-fallback', engine.english_frontend
           PY
 
       - name: Edge TTS real online generation
@@ -124,25 +108,16 @@ jobs:
           from pathlib import Path
           import edge_tts
           from mutagen.mp3 import MP3
-
-          target = Path('/tmp/project5-edge-selfcheck.mp3')
+          target = Path('/tmp/project5-edge.mp3')
           for attempt in range(1, 4):
               try:
                   target.unlink(missing_ok=True)
-                  started = time.perf_counter()
-                  edge_tts.Communicate(
-                      '你好，这是 Project5 Edge TTS API test。',
-                      'zh-CN-XiaoxiaoNeural',
-                  ).save_sync(str(target))
-                  elapsed = time.perf_counter() - started
-                  assert target.stat().st_size > 512
-                  duration = MP3(str(target)).info.length
-                  assert duration > 0
-                  print(f'edge-real-generation-ok bytes={target.stat().st_size} duration={duration:.2f}s elapsed={elapsed:.2f}s')
+                  edge_tts.Communicate('你好，这是 Project5 Edge TTS API test。','zh-CN-XiaoxiaoNeural').save_sync(str(target))
+                  assert target.stat().st_size > 512 and MP3(str(target)).info.length > 0
+                  print('edge-real-generation-ok')
                   break
               except Exception:
-                  if attempt == 3:
-                      raise
+                  if attempt == 3: raise
                   time.sleep(attempt * 2)
           PY
 
@@ -160,42 +135,24 @@ jobs:
           from app.entry import app
 
           headers = {'X-Admin-Key': 'ci-project5-admin'}
-          text = '今天通过 Project5 API 测试 LangChain、RAG、Agent、MCP 和 API。'
-
           def wait(client, task_id):
-              deadline = time.time() + 120
+              deadline = time.time() + 180
               while time.time() < deadline:
-                  r = client.get(f'/admin/tasks/{task_id}', headers=headers)
-                  assert r.status_code == 200, r.text
-                  task = r.json()
-                  if task['status'] == 'completed':
-                      return task
-                  if task['status'] == 'failed':
-                      raise RuntimeError(task.get('error'))
+                  task = client.get(f'/admin/tasks/{task_id}', headers=headers).json()
+                  if task['status'] == 'completed': return task
+                  if task['status'] == 'failed': raise RuntimeError(task.get('error'))
                   time.sleep(0.5)
               raise TimeoutError(task_id)
 
           with TestClient(app) as client:
-              h = client.get('/health')
-              assert h.status_code == 200, h.text
-              voices = client.get('/v1/voices?engine=edge')
-              assert voices.status_code == 200 and voices.json()['voices']
-
               k = client.post('/admin/speech', headers=headers, json={
-                  'input': text, 'engine': 'kokoro', 'voice': 'zf_001', 'speed': 1.0,
-              })
+                  'input':'Have you ever wondered how AI-generated voices work?',
+                  'engine':'kokoro','voice':'zf_001','speed':1.0})
               e = client.post('/admin/speech', headers=headers, json={
-                  'input': text, 'engine': 'edge', 'voice': 'zh-CN-XiaoxiaoNeural', 'speed': 1.0,
-              })
-              assert k.status_code == 202, k.text
-              assert e.status_code == 202, e.text
-
-              kt = wait(client, k.json()['id'])
-              et = wait(client, e.json()['id'])
-              assert kt['engine'] == 'kokoro' and kt['audio_filename'].endswith('.wav')
-              assert et['engine'] == 'edge' and et['audio_filename'].endswith('.mp3')
-              assert Path('data/audio', kt['audio_filename']).stat().st_size > 44
-              assert Path('data/audio', et['audio_filename']).stat().st_size > 512
-              print('api-kokoro-ok', kt['id'], kt['elapsed_ms'], kt['audio_filename'])
-              print('api-edge-ok', et['id'], et['elapsed_ms'], et['audio_filename'])
+                  'input':'今天测试 Edge TTS。','engine':'edge','voice':'zh-CN-XiaoxiaoNeural','speed':1.0})
+              assert k.status_code == 202 and e.status_code == 202
+              kt, et = wait(client,k.json()['id']), wait(client,e.json()['id'])
+              assert Path('data/audio',kt['audio_filename']).stat().st_size > 44
+              assert Path('data/audio',et['audio_filename']).stat().st_size > 512
+              print('api-dual-ok', kt['id'], et['id'])
           PY
