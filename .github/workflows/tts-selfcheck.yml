@@ -8,7 +8,7 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -73,6 +73,49 @@ jobs:
           print('mixed-g2p-ok:', phonemes)
           PY
 
+      - name: Download verified Kokoro v1.1 zh assets
+        run: |
+          mkdir -p models
+          curl -fL --retry 5 -o models/kokoro-v1.1-zh.onnx \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.1-zh.onnx
+          curl -fL --retry 5 -o models/voices-v1.1-zh.bin \
+            https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.1-zh.bin
+          curl -fL --retry 5 -o models/config.json \
+            https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh/resolve/main/config.json
+          echo '859f9ded9f53be16c24857cdab3254a45da53c3afd5ba6ef134c7de3f822e326  models/kokoro-v1.1-zh.onnx' | sha256sum -c -
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          p = Path('models/voices-v1.1-zh.bin')
+          assert p.stat().st_size == 53815880, p.stat().st_size
+          with zipfile.ZipFile(p) as z:
+              assert len(z.namelist()) == 103
+              assert z.testzip() is None
+              assert 'zf_001.npy' in z.namelist()
+          print('kokoro-assets-ok')
+          PY
+
+      - name: Kokoro real mixed-language generation
+        env:
+          KOKORO_THREADS: '4'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import time
+          import soundfile as sf
+          from app.dual_tts import generate_kokoro
+
+          target = Path('/tmp/project5-kokoro-mixed-selfcheck.wav')
+          text = '今天我们学习 LangChain、RAG、Agent、MCP、LLM 和 API。'
+          started = time.perf_counter()
+          duration = generate_kokoro(text, 'zf_001', 1.0, target)
+          elapsed = time.perf_counter() - started
+          assert target.exists() and target.stat().st_size > 44
+          info = sf.info(str(target))
+          assert info.frames > 0 and info.duration > 0
+          print(f'kokoro-real-generation-ok bytes={target.stat().st_size} duration={duration:.2f}s elapsed={elapsed:.2f}s')
+          PY
+
       - name: Edge TTS real online generation
         run: |
           python - <<'PY'
@@ -82,21 +125,21 @@ jobs:
           from mutagen.mp3 import MP3
 
           target = Path('/tmp/project5-edge-selfcheck.mp3')
-          last = None
           for attempt in range(1, 4):
               try:
                   target.unlink(missing_ok=True)
+                  started = time.perf_counter()
                   edge_tts.Communicate(
                       '你好，这是 Project5 Edge TTS API test。',
                       'zh-CN-XiaoxiaoNeural',
                   ).save_sync(str(target))
+                  elapsed = time.perf_counter() - started
                   assert target.stat().st_size > 512
                   duration = MP3(str(target)).info.length
                   assert duration > 0
-                  print(f'edge-real-generation-ok bytes={target.stat().st_size} duration={duration:.2f}s')
+                  print(f'edge-real-generation-ok bytes={target.stat().st_size} duration={duration:.2f}s elapsed={elapsed:.2f}s')
                   break
-              except Exception as exc:
-                  last = exc
+              except Exception:
                   if attempt == 3:
                       raise
                   time.sleep(attempt * 2)
