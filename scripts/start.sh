@@ -14,22 +14,17 @@ if [ ! -x .venv/bin/python ]; then
 fi
 
 set -a
+# shellcheck disable=SC1091
 source .env
 set +a
 PORT="${PROJECT5_PORT:-8005}"
 PID_FILE="logs/project5.pid"
+CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+export PROJECT5_COMMIT="$CURRENT_COMMIT"
 
-start_melo_if_installed() {
-  if [ -x "$PROJECT_DIR/.venv-melo/bin/python" ] && [ -f "$PROJECT_DIR/.runtime/MeloTTS/melo/api.py" ]; then
-    nohup bash "$PROJECT_DIR/scripts/start-melo.sh" >> "$PROJECT_DIR/logs/melo-startup.log" 2>&1 < /dev/null &
-  fi
-}
-
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "[Project5] 已在运行 PID=$(cat "$PID_FILE")"
-  start_melo_if_installed
-  exit 0
-fi
+# Never trust a stale PID file. start.sh itself guarantees the Project5 port is
+# free before launching, so it is safe even when called without restart.sh.
+bash "$PROJECT_DIR/scripts/stop.sh"
 
 nohup .venv/bin/python -m uvicorn app.entry:app \
   --host 127.0.0.1 \
@@ -38,11 +33,31 @@ nohup .venv/bin/python -m uvicorn app.entry:app \
   >> logs/app.log 2>&1 &
 PID=$!
 echo "$PID" > "$PID_FILE"
-sleep 2
-if ! kill -0 "$PID" 2>/dev/null; then
-  echo "[Project5] 启动失败，最近日志："
-  tail -n 80 logs/app.log || true
+
+# A process existing for 2 seconds is not enough. Verify the actual page and the
+# updated preview/voice-note JavaScript are being served by the new listener.
+ONLINE=0
+for _ in {1..40}; do
+  if ! kill -0 "$PID" 2>/dev/null; then break; fi
+  PAGE="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
+  JS="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  if printf '%s' "$PAGE" | grep -q 'Kokoro 本地试听' \
+    && printf '%s' "$PAGE" | grep -q 'Edge 在线试听' \
+    && printf '%s' "$PAGE" | grep -q 'preview-admin.js' \
+    && printf '%s' "$JS" | grep -q '这个音色的备注' \
+    && printf '%s' "$JS" | grep -q '手动补齐全部音色'; then
+    ONLINE=1
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$ONLINE" -ne 1 ]; then
+  echo "[Project5][ERROR] 新进程没有成功提供最新版前端，PID=${PID} PORT=${PORT}"
+  tail -n 120 logs/app.log || true
+  bash "$PROJECT_DIR/scripts/stop.sh" || true
   exit 1
 fi
-start_melo_if_installed
-echo "[Project5] 启动成功 http://127.0.0.1:${PORT} PID=${PID}"
+
+echo "[Project5] 最新进程已上线 commit=${CURRENT_COMMIT} http://127.0.0.1:${PORT} PID=${PID}"
+echo "[Project5] 已验证：Kokoro + Edge + 手动固定试听 + 音色备注"
