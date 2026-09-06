@@ -64,7 +64,8 @@ fi
 
 REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')"
 OLD_HASH="$(cat .requirements.sha256 2>/dev/null || true)"
-if [ "$REQ_HASH" != "$OLD_HASH" ] || ! .venv/bin/python -c 'import kokoro_onnx, onnxruntime, misaki' >/dev/null 2>&1; then
+RUNTIME_IMPORT_TEST='import kokoro_onnx, onnxruntime; from misaki.zh import ZHG2P; ZHG2P(version="1.1")'
+if [ "$REQ_HASH" != "$OLD_HASH" ] || ! .venv/bin/python -c "$RUNTIME_IMPORT_TEST" >/dev/null 2>&1; then
   echo "[4/6] 安装/更新 ONNX CPU 依赖"
   .venv/bin/python -m pip uninstall -y kokoro torch >/dev/null 2>&1 || true
   .venv/bin/python -m pip install -r requirements.txt
@@ -73,6 +74,24 @@ else
   echo "[4/6] 依赖已就绪"
 fi
 
+# A previous environment can contain the old `misaki` distribution together with
+# `misaki-fork`. Both expose the same top-level package name and can leave a broken
+# namespace package behind. Project5 needs the Chinese submodule specifically.
+if ! .venv/bin/python -c 'from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null 2>&1; then
+  echo "[4/6] 检测到 Misaki 中文模块冲突，执行一次干净修复"
+  .venv/bin/python -m pip uninstall -y misaki misaki-fork >/dev/null 2>&1 || true
+  SITE_PACKAGES="$(.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')"
+  rm -rf "$SITE_PACKAGES/misaki" "$SITE_PACKAGES"/misaki-*.dist-info "$SITE_PACKAGES"/misaki_fork-*.dist-info
+  .venv/bin/python -m pip install --no-cache-dir --force-reinstall 'misaki-fork[zh]==0.9.6'
+fi
+
+if ! .venv/bin/python -c 'from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null 2>&1; then
+  echo "[ERROR] Misaki 中文 G2P 仍不可用"
+  .venv/bin/python -c 'import misaki, sys; print("misaki=", misaki); print("sys.path=", sys.path); from misaki.zh import ZHG2P' || true
+  exit 1
+fi
+echo "[4/6] Misaki 中文 G2P 验证通过"
+
 MODEL_FILE="models/kokoro-v1.1-zh.int8.onnx"
 VOICES_FILE="models/voices-v1.1-zh.bin"
 CONFIG_FILE="models/config.json"
@@ -80,10 +99,6 @@ MODEL_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-f
 VOICES_URL="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.1-zh.bin"
 CONFIG_URL="https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh/resolve/main/config.json"
 
-# Background bootstrap is not constrained by BaoTa's webhook timeout anymore.
-# Prefer a fresh atomic download over HTTP resume. GitHub release redirects can
-# make Range/resume behaviour inconsistent and previously left the voice pack as
-# a broken .part file even after curl reported 100% transfer.
 download_atomic() {
   local dest="$1"
   local min_bytes="$2"
@@ -151,15 +166,20 @@ set -a
 source .env
 set +a
 PORT="${PROJECT5_PORT:-8005}"
-for i in {1..30}; do
-  if .venv/bin/python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT}/health', timeout=2).read()" >/dev/null 2>&1; then
-    echo "[SUCCESS] Project5 已启动：http://127.0.0.1:${PORT}"
+echo "[Project5] 等待 Kokoro ONNX 完成加载与预热……"
+for i in {1..180}; do
+  if .venv/bin/python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:${PORT}/health', timeout=2)); raise SystemExit(0 if d.get('model_loaded') is True else 1)" >/dev/null 2>&1; then
+    echo "[SUCCESS] Project5 模型已就绪：http://127.0.0.1:${PORT}"
     echo "Bootstrap success: $(date '+%Y-%m-%d %H:%M:%S')" >> logs/deploy.log
     exit 0
   fi
   sleep 1
 done
 
-echo "[ERROR] 重启后健康检查失败"
-tail -n 120 logs/app.log || true
+echo "[ERROR] Web 服务已启动，但 Kokoro 模型在 180 秒内未就绪"
+echo "===== /health ====="
+curl -s "http://127.0.0.1:${PORT}/health" || true
+echo
+echo "===== app.log ====="
+tail -n 160 logs/app.log || true
 exit 1
