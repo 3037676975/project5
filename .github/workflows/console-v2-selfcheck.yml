@@ -13,7 +13,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Python syntax
-        run: python -m py_compile app/entry.py app/tts.py app/dual_tts.py
+        run: |
+          python -m py_compile app/entry.py app/tts.py app/dual_tts.py scripts/build-voice-previews.py
 
       - name: Explicit dual-engine console structure
         run: |
@@ -25,6 +26,10 @@ jobs:
           grep -q 'engine=kokoro' app/static/console-v2.html
           grep -q 'engine=edge' app/static/console-v2.html
           grep -q 'progress-ring' app/static/console-v2.html
+          grep -q '固定音色试听' app/static/console-v2.html
+          grep -q '一键删除全部音频' app/static/console-v2.html
+          grep -q 'deleteAudioBatch' app/static/console-v2.html
+          grep -q 'static/previews/manifest.json' app/static/console-v2.html
           grep -q 'console-v2.html' app/entry.py
           grep -q 'dual-engine-v2' app/entry.py
 
@@ -44,5 +49,8 @@ jobs:
         run: |
           grep -q 'misaki-en-g2p+espeak-fallback' app/tts.py
           grep -q 'ZHG2P(version="1.1", unk="", en_callable=self._english_callable)' app/tts.py
+          grep -q 'soft-join-v1' app/tts.py
+          grep -q 'ENGLISH_RUN_RE' app/tts.py
           grep -q 'SUPPORTED_ENGINES = (KOKORO_ENGINE, EDGE_ENGINE)' app/dual_tts.py
           grep -q 'setup-kokoro-english.sh' scripts/auto-deploy.sh
+          grep -q 'build-voice-previews.py' scripts/setup-kokoro-english.sh
