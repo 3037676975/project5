@@ -45,6 +45,7 @@ jobs:
           node --check app/static/voice-library.js
           node --check app/static/api-docs-beginner.js
           node --check app/static/api-key-ui.js
+          node --check app/static/api-public-base.js
 
       - name: Voice library and retention frontend
         run: |
@@ -82,6 +83,18 @@ jobs:
           grep -q '1.10' API_DOCS.md
           grep -q '你读完这份上下文以后，必须实际完成这些工作' AI_API_CONTEXT.md
           grep -q 'API 中文小白教程' app/static/api-guide-zh.html
+
+      - name: Public API request address in guides
+        run: |
+          grep -q 'api-public-base.js' app/voice_notes.py
+          grep -q 'public-api-base-url-in-guides' app/voice_notes.py
+          grep -q 'window.location.origin' app/static/api-public-base.js
+          grep -q '当前 Project5 公网请求地址' app/static/api-public-base.js
+          grep -q '复制请求地址' app/static/api-public-base.js
+          grep -q '186.244.245.177:28442' API_DOCS.md
+          grep -q '186.244.245.177:28442' AI_API_CONTEXT.md
+          grep -q '/v1/audio/speech' app/static/api-public-base.js
+          grep -q '/v1/tasks/{task_id}' app/static/api-public-base.js
 
       - name: Retention backend and deployment handoff
         run: |
