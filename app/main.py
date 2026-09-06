@@ -71,13 +71,14 @@ def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
 def init_db() -> None:
     with db() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS api_keys (
@@ -207,16 +208,18 @@ def get_api_key(authorization: str | None) -> sqlite3.Row | None:
         return None
     raw = authorization.split(" ", 1)[1].strip()
     with db() as conn:
-        row = conn.execute(
+        return conn.execute(
             "SELECT * FROM api_keys WHERE key_hash=? AND active=1",
             (key_digest(raw),),
         ).fetchone()
-        if row:
-            conn.execute(
-                "UPDATE api_keys SET calls=calls+1,last_used_at=? WHERE id=?",
-                (now(), row["id"]),
-            )
-        return row
+
+
+def count_api_key_call(key_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE api_keys SET calls=calls+1,last_used_at=? WHERE id=?",
+            (now(), key_id),
+        )
 
 
 def write_log(
@@ -451,6 +454,7 @@ async def speech_api(
         write_log(None, ip, "POST", "/v1/audio/speech", 401, elapsed)
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    count_api_key_call(key["id"])
     task = create_task_record(payload, key["name"], ip, key["id"])
     await enqueue_task(task["id"])
     elapsed = int((time.perf_counter() - started) * 1000)
