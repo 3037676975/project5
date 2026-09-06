@@ -4,13 +4,16 @@
   const state = {
     manifest: { text: DEFAULT_TEXT, text_hash: '', kokoro: {}, edge: {}, counts: {} },
     jobs: {},
-    dirty: { kokoro: false, edge: false }
+    dirty: { kokoro: false, edge: false },
+    notes: { kokoro: {}, edge: {} }
   };
 
   function engineLabel(engine) { return engine === 'edge' ? 'Edge' : 'Kokoro'; }
   function selector(engine, suffix) { return document.querySelector(`#${engine}${suffix}`); }
   function editor(engine) { return document.querySelector(`#${engine}PreviewTemplate`); }
   function selectedVoice(engine) { return selector(engine, 'Voice')?.value || ''; }
+  function noteInput(engine) { return document.querySelector(`#${engine}VoiceNote`); }
+  function noteStatus(engine) { return document.querySelector(`#${engine}VoiceNoteStatus`); }
 
   function setStatus(engine, text, kind = 'processing') {
     const el = selector(engine, 'PreviewStatus');
@@ -31,6 +34,65 @@
     if (!value) return null;
     if (typeof value === 'string') return { url: value, stale: false };
     return value;
+  }
+
+  function noteFor(engine, voice) {
+    return state.notes?.[engine]?.[voice]?.note || '';
+  }
+
+  function decorateVoiceOptions(engine) {
+    const select = selector(engine, 'Voice');
+    if (!select) return;
+    [...select.options].forEach(option => {
+      if (!option.dataset.baseLabel) option.dataset.baseLabel = option.textContent || option.value;
+      const note = noteFor(engine, option.value).trim();
+      const short = note.length > 24 ? note.slice(0, 24) + '…' : note;
+      option.textContent = note ? `${option.dataset.baseLabel} · 📝 ${short}` : option.dataset.baseLabel;
+    });
+  }
+
+  function refreshVoiceNote(engine) {
+    const input = noteInput(engine);
+    const statusEl = noteStatus(engine);
+    if (!input || !statusEl) return;
+    const voice = selectedVoice(engine);
+    const note = noteFor(engine, voice);
+    input.value = note;
+    input.dataset.voice = voice;
+    statusEl.textContent = note ? '已保存' : '未备注';
+  }
+
+  async function loadVoiceNotes(quiet = false) {
+    if (typeof sessionToken !== 'undefined' && !sessionToken) return;
+    try {
+      const data = await adminApi('/admin/voice-notes?_=' + Date.now());
+      state.notes = data.notes || { kokoro: {}, edge: {} };
+      ['kokoro', 'edge'].forEach(engine => {
+        decorateVoiceOptions(engine);
+        refreshVoiceNote(engine);
+      });
+    } catch (err) {
+      ['kokoro', 'edge'].forEach(engine => {
+        const el = noteStatus(engine);
+        if (el) el.textContent = '备注读取失败';
+      });
+      if (!quiet && typeof toast === 'function') toast(err.message || '音色备注读取失败');
+    }
+  }
+
+  async function saveVoiceNote(engine) {
+    const voice = selectedVoice(engine);
+    const input = noteInput(engine);
+    if (!voice || !input) throw new Error('请先选择音色');
+    const note = input.value.trim();
+    const data = await adminApi('/admin/voice-notes', {
+      method: 'PUT',
+      body: JSON.stringify({ engine, voice, note })
+    });
+    state.notes[engine] = data.notes?.[engine] || {};
+    decorateVoiceOptions(engine);
+    refreshVoiceNote(engine);
+    if (typeof toast === 'function') toast(note ? '这个音色的备注已永久保存' : '这个音色的备注已清空');
   }
 
   function refreshManualPreview(engine) {
@@ -181,7 +243,18 @@
     if (oldText) oldText.style.display = 'none';
 
     const note = document.querySelector(`#${engine} .engine-note`);
-    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以手动补齐全部音色；固定试听统一为 1.0x，生成后的试听会永久保存在服务器本地。';
+    if (note) note.innerHTML = '<b>固定试听改为手动模式：</b>系统不会再自动跑后台任务。你保存统一试听文案后，可以只生成当前音色，也可以手动补齐全部音色；固定试听统一为 1.0x，生成后的试听会永久保存在服务器本地。每个音色还可以写你自己的备注。';
+
+    const voiceNote = document.createElement('div');
+    voiceNote.className = 'field';
+    voiceNote.innerHTML = `
+      <label>这个音色的备注（只给你自己看，永久保存在服务器）</label>
+      <div class="row">
+        <input id="${engine}VoiceNote" class="input" maxlength="500" style="flex:1;min-width:260px" placeholder="例如：温柔、适合播客女声、英文自然、偏成熟……">
+        <button class="btn small secondary" id="${engine}SaveVoiceNote">保存备注</button>
+        <span class="muted" id="${engine}VoiceNoteStatus">未备注</span>
+      </div>`;
+    box.parentNode.insertBefore(voiceNote, box);
 
     const controls = document.createElement('div');
     controls.innerHTML = `
@@ -201,6 +274,12 @@
 
     const textEditor = editor(engine);
     if (textEditor) textEditor.addEventListener('input', () => { state.dirty[engine] = true; });
+    const voiceNoteInput = noteInput(engine);
+    if (voiceNoteInput) voiceNoteInput.addEventListener('input', () => {
+      const el = noteStatus(engine);
+      if (el) el.textContent = '未保存';
+    });
+    document.querySelector(`#${engine}SaveVoiceNote`).onclick = () => saveVoiceNote(engine).catch(err => toast(err.message));
     document.querySelector(`#${engine}SavePreviewText`).onclick = () => saveTemplate(engine).catch(err => toast(err.message));
     document.querySelector(`#${engine}GeneratePreview`).onclick = () => generateCurrent(engine);
     document.querySelector(`#${engine}GenerateAllPreview`).onclick = () => generateAll(engine);
@@ -218,12 +297,16 @@
 
   const kokoroVoice = selector('kokoro', 'Voice');
   const edgeVoice = selector('edge', 'Voice');
-  if (kokoroVoice) kokoroVoice.onchange = () => refreshManualPreview('kokoro');
-  if (edgeVoice) edgeVoice.onchange = () => refreshManualPreview('edge');
+  if (kokoroVoice) kokoroVoice.onchange = () => { refreshManualPreview('kokoro'); refreshVoiceNote('kokoro'); };
+  if (edgeVoice) edgeVoice.onchange = () => { refreshManualPreview('edge'); refreshVoiceNote('edge'); };
   const kokoroPlay = selector('kokoro', 'PreviewBtn');
   const edgePlay = selector('edge', 'PreviewBtn');
   if (kokoroPlay) kokoroPlay.onclick = () => playManualPreview('kokoro');
   if (edgePlay) edgePlay.onclick = () => playManualPreview('edge');
 
-  if (typeof sessionToken !== 'undefined' && sessionToken) loadManualManifest(true);
+  if (typeof sessionToken !== 'undefined' && sessionToken) {
+    Promise.all([loadManualManifest(true), loadVoiceNotes(true)]).then(() => {
+      setTimeout(() => ['kokoro', 'edge'].forEach(engine => { decorateVoiceOptions(engine); refreshVoiceNote(engine); }), 300);
+    });
+  }
 })();
