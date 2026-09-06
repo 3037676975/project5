@@ -30,8 +30,9 @@ from app.tts import CONFIG_PATH, MODEL_PATH, VOICES_PATH, engine
 
 # Registers the administrator-controlled fixed-preview API. Importing this module
 # does not start any synthesis job; previews are generated only after an explicit
-# action from the console.
-import app.preview_admin  # noqa: F401,E402
+# action from the console. Use an alias so the package name never shadows the
+# FastAPI `app` object imported above.
+from app import preview_admin as _preview_admin  # noqa: F401,E402
 
 
 # ---------------------------------------------------------------------------
