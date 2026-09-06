@@ -7,10 +7,8 @@ mkdir -p logs data/audio models
 
 exec 9>"$PROJECT_DIR/logs/bootstrap.lock"
 if command -v flock >/dev/null 2>&1; then
-  if ! flock -n 9; then
-    echo "[Project5] bootstrap 已有实例运行，当前任务退出。"
-    exit 0
-  fi
+  echo "[Project5] 等待部署锁，避免多个 Webhook 同时修改运行环境"
+  flock 9
 fi
 
 printf '%s\n' '================================================'
@@ -27,6 +25,24 @@ for candidate in python3.12 python3.11 python3.10 python3; do
 done
 [ -n "$PYTHON_BIN" ] || { echo '[ERROR] 需要 Python 3.10+'; exit 1; }
 echo "[1/9] Python: $($PYTHON_BIN --version)"
+
+CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ -f "$PROJECT_DIR/logs/last-selfcheck.json" ]; then
+  LAST_OK="$(SELF_PATH="$PROJECT_DIR/logs/last-selfcheck.json" CURRENT_COMMIT="$CURRENT_COMMIT" "$PYTHON_BIN" - <<'PY' 2>/dev/null || true
+import json, os
+try:
+    with open(os.environ["SELF_PATH"], encoding="utf-8") as f:
+        d = json.load(f)
+    print("yes" if d.get("status") == "success" and d.get("commit") == os.environ["CURRENT_COMMIT"] else "no")
+except Exception:
+    print("no")
+PY
+)"
+  if [ "$LAST_OK" = "yes" ]; then
+    echo "[Project5] 当前 commit=${CURRENT_COMMIT} 已通过全链路自检，跳过重复部署"
+    exit 0
+  fi
+fi
 
 if ! command -v espeak-ng >/dev/null 2>&1; then
   echo '[2/9] 安装 espeak-ng'
@@ -149,7 +165,7 @@ echo '[6/9] 运行配置已更新'
 SELFTEST_JSON="$PROJECT_DIR/logs/last-selfcheck.json"
 write_selfcheck() {
   local status="$1" stage="$2" message="$3" task_id="${4:-}"
-  SELF_STATUS="$status" SELF_STAGE="$stage" SELF_MESSAGE="$message" SELF_TASK_ID="$task_id" SELF_PATH="$SELFTEST_JSON" .venv/bin/python - <<'PY'
+  SELF_STATUS="$status" SELF_STAGE="$stage" SELF_MESSAGE="$message" SELF_TASK_ID="$task_id" SELF_PATH="$SELFTEST_JSON" SELF_COMMIT="$CURRENT_COMMIT" .venv/bin/python - <<'PY'
 import json, os
 from datetime import datetime
 data = {
@@ -157,6 +173,7 @@ data = {
     "stage": os.environ["SELF_STAGE"],
     "message": os.environ["SELF_MESSAGE"],
     "task_id": os.environ.get("SELF_TASK_ID") or None,
+    "commit": os.environ.get("SELF_COMMIT") or None,
     "updated_at": datetime.now().isoformat(timespec="seconds"),
 }
 with open(os.environ["SELF_PATH"], "w", encoding="utf-8") as f:
