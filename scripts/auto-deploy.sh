@@ -51,13 +51,13 @@ pkill -f 'scripts/setup-melo.sh' >/dev/null 2>&1 || true
 bash "$PROJECT_DIR/scripts/stop-melo.sh" >/dev/null 2>&1 || true
 echo '[2/5] 已清理旧 English / preview / Melo worker'
 
-# Experience rule: code updated != process updated != live version updated.
+# Experience rule: code updated != process updated != live frontend updated.
 FAST_OK=0
 if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
-  echo '[3/5] 立即强制替换旧端口进程，并上线刚拉取的前端'
+  echo '[3/5] 立即释放 Project5 端口，杀掉旧前端进程并启动当前 commit'
   if bash "$PROJECT_DIR/scripts/restart.sh"; then
     FAST_OK=1
-    echo '[3/5] [OK] 最新前端已由新进程真实提供'
+    echo '[3/5] [OK] 新进程已经启动并通过当前前端验证'
   else
     echo '[3/5] 快速切换失败，将交给完整部署 worker 修复依赖后再次启动'
   fi
@@ -75,23 +75,28 @@ fi
 BOOT_PID=$!
 disown "$BOOT_PID" 2>/dev/null || true
 printf '%s\n' "$BOOT_PID" > "$PROJECT_DIR/logs/deploy-worker.pid"
-echo "[4/5] 完整部署 worker=${BOOT_PID} 已在后台启动"
+echo "[4/5] 完整部署 worker=${BOOT_PID} 已在后台启动；不会挡住前端切换"
 
 live_is_current() {
-  local page js version
+  local page preview_js library_js version
   page="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/" 2>/dev/null || true)"
-  js="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  preview_js="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/preview-admin.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
+  library_js="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/static/voice-library.js?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
   version="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/deploy-version?_=${CURRENT_COMMIT}" 2>/dev/null || true)"
   printf '%s' "$page" | grep -q 'Kokoro 本地试听' \
     && printf '%s' "$page" | grep -q 'Edge 在线试听' \
-    && printf '%s' "$js" | grep -q '这个音色的备注' \
-    && printf '%s' "$js" | grep -q '手动补齐全部音色' \
-    && printf '%s' "$version" | grep -q "$CURRENT_COMMIT"
+    && printf '%s' "$preview_js" | grep -q 'voice-library.js' \
+    && printf '%s' "$preview_js" | grep -q '一键生成全部试听' \
+    && printf '%s' "$library_js" | grep -q '音色库 / 固定试听表' \
+    && printf '%s' "$library_js" | grep -q '24小时自动清理' \
+    && printf '%s' "$library_js" | grep -q 'Project5 双引擎 API' \
+    && printf '%s' "$version" | grep -q "$CURRENT_COMMIT" \
+    && printf '%s' "$version" | grep -q 'voice-library-retention-v1'
 }
 
 if [ "$FAST_OK" -eq 1 ] && live_is_current; then
-  echo "[5/5] [OK] 部署成功：代码、端口进程、线上 commit 三层一致 ${CURRENT_COMMIT}"
-  echo '[Project5] 后台 worker 会继续完成模型/依赖/真实 TTS 自检。'
+  echo "[5/5] [OK] 部署成功：代码、端口新进程、线上 commit、新功能四层一致 ${CURRENT_COMMIT}"
+  echo '[Project5] 后台 worker 会继续完成模型/依赖/真实 TTS 自检，但不再阻塞前端。'
   exit 0
 fi
 
