@@ -57,7 +57,6 @@ def _remove_route(path: str, method: str) -> None:
             app.router.routes.remove(route)
 
 
-# Replace the original single-engine routes while keeping the rest of main.py intact.
 for _path, _method in (
     ("/", "GET"),
     ("/health", "GET"),
@@ -134,8 +133,6 @@ async def _run_dual_task(task_id: str) -> None:
     started = time.perf_counter()
     try:
         if selected_engine == KOKORO_ENGINE:
-            # Kokoro is a local CPU model; serialize local inference so two tasks do
-            # not fight for the same 8 CPU cores / ONNX session.
             async with core.tts_lock:
                 duration = await asyncio.to_thread(
                     generate_dual_tts,
@@ -146,7 +143,6 @@ async def _run_dual_task(task_id: str) -> None:
                     output,
                 )
         else:
-            # Edge is online/network-bound and may run while Kokoro uses the CPU.
             duration = await asyncio.to_thread(
                 generate_dual_tts,
                 selected_engine,
@@ -188,8 +184,6 @@ async def _run_dual_task(task_id: str) -> None:
             )
 
 
-# core.task_worker resolves run_task from app.main's globals at runtime, so replacing
-# it here upgrades both the original worker and the extra worker below.
 core.run_task = _run_dual_task
 
 _extra_worker: asyncio.Task | None = None
@@ -197,9 +191,7 @@ _extra_worker: asyncio.Task | None = None
 
 @app.on_event("startup")
 async def start_second_tts_worker() -> None:
-    """Allow one Edge network task to run in parallel with one Kokoro CPU task."""
     global _extra_worker
-    # app.main's startup hook is registered first and initializes task_queue.
     if core.task_queue is not None:
         _extra_worker = asyncio.create_task(core.task_worker(), name="project5-tts-worker-2")
 
@@ -216,16 +208,18 @@ async def stop_second_tts_worker() -> None:
 
 @app.get("/")
 def project5_console() -> HTMLResponse:
-    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    marker = "</body>"
-    scripts = (
-        '<script src="/static/runtime-overlay.js?v=20260906-3"></script>\n'
-        '<script src="/static/engine-overlay.js?v=20260906-1"></script>\n'
-        '<script src="/static/task-v2.js?v=20260906-2"></script>'
+    # Important: serve the real dual-engine HTML directly. Do not depend on a
+    # post-load overlay to turn the old Kokoro-only console into an Edge console.
+    html = (STATIC_DIR / "console-v2.html").read_text(encoding="utf-8")
+    return HTMLResponse(
+        html,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Project5-Console": "dual-engine-v2",
+        },
     )
-    if "/static/engine-overlay.js" not in html:
-        html = html.replace(marker, scripts + "\n" + marker)
-    return HTMLResponse(html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 
 @app.get("/health")
@@ -239,6 +233,7 @@ def health() -> dict:
         "model": core.REPO_ID,
         "model_loaded": engine.loaded,
         "device": engine.device,
+        "console": "dual-engine-v2",
         "engines": {
             KOKORO_ENGINE: {
                 "name": "Kokoro-82M-v1.1-zh",
@@ -374,6 +369,7 @@ def project5_runtime() -> dict:
         "load_metrics": engine.load_metrics,
         "last_metrics": engine.last_metrics,
         "selfcheck": _last_selfcheck(),
+        "console": "dual-engine-v2",
         "engines": {
             "kokoro": {
                 "state": state,
