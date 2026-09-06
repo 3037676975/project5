@@ -12,7 +12,7 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 printf '%s\n' '================================================'
-printf '%s\n' ' Project5 · Runtime Bootstrap + End-to-End Selfcheck'
+printf '%s\n' ' Project5 · Dual TTS Bootstrap + End-to-End Selfcheck'
 printf '%s\n' " $(date '+%Y-%m-%d %H:%M:%S')"
 printf '%s\n' '================================================'
 
@@ -24,41 +24,41 @@ for candidate in python3.12 python3.11 python3.10 python3; do
   fi
 done
 [ -n "$PYTHON_BIN" ] || { echo '[ERROR] 需要 Python 3.10+'; exit 1; }
-echo "[1/9] Python: $($PYTHON_BIN --version)"
+echo "[1/10] Python: $($PYTHON_BIN --version)"
 
 CURRENT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 if [ -f "$PROJECT_DIR/logs/last-selfcheck.json" ]; then
   LAST_OK="$(SELF_PATH="$PROJECT_DIR/logs/last-selfcheck.json" CURRENT_COMMIT="$CURRENT_COMMIT" "$PYTHON_BIN" - <<'PY' 2>/dev/null || true
 import json, os
 try:
-    with open(os.environ["SELF_PATH"], encoding="utf-8") as f:
+    with open(os.environ['SELF_PATH'], encoding='utf-8') as f:
         d = json.load(f)
-    print("yes" if d.get("status") == "success" and d.get("commit") == os.environ["CURRENT_COMMIT"] else "no")
+    print('yes' if d.get('status') == 'success' and d.get('commit') == os.environ['CURRENT_COMMIT'] else 'no')
 except Exception:
-    print("no")
+    print('no')
 PY
 )"
   if [ "$LAST_OK" = "yes" ]; then
-    echo "[Project5] 当前 commit=${CURRENT_COMMIT} 已通过全链路自检，跳过重复部署"
+    echo "[Project5] 当前 commit=${CURRENT_COMMIT} 已通过双引擎全链路自检，跳过重复部署"
     exit 0
   fi
 fi
 
 if ! command -v espeak-ng >/dev/null 2>&1; then
-  echo '[2/9] 安装 espeak-ng'
+  echo '[2/10] 安装系统 espeak-ng（同时保留 Python espeakng-loader 兜底）'
   if command -v dnf >/dev/null 2>&1; then dnf install -y espeak-ng || true
   elif command -v yum >/dev/null 2>&1; then yum install -y espeak-ng || true
   elif command -v apt-get >/dev/null 2>&1; then apt-get update -y && apt-get install -y espeak-ng || true
   fi
 else
-  echo '[2/9] espeak-ng 已安装'
+  echo '[2/10] espeak-ng 已安装'
 fi
 
 if [ ! -x .venv/bin/python ]; then
-  echo '[3/9] 创建 .venv'
+  echo '[3/10] 创建 .venv'
   "$PYTHON_BIN" -m venv .venv
 else
-  echo '[3/9] 复用 .venv'
+  echo '[3/10] 复用 .venv'
 fi
 
 if ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
@@ -68,24 +68,33 @@ fi
 
 REQ_HASH="$(sha256sum requirements.txt | awk '{print $1}')"
 OLD_HASH="$(cat .requirements.sha256 2>/dev/null || true)"
-if [ "$REQ_HASH" != "$OLD_HASH" ] || ! .venv/bin/python -c 'import kokoro_onnx, onnxruntime; from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null 2>&1; then
-  echo '[4/9] 安装/更新 Kokoro ONNX CPU 依赖'
-  .venv/bin/python -m pip uninstall -y kokoro torch >/dev/null 2>&1 || true
+if [ "$REQ_HASH" != "$OLD_HASH" ] || ! .venv/bin/python - <<'PY' >/dev/null 2>&1
+import edge_tts, espeakng_loader, kokoro_onnx, onnxruntime, phonemizer
+from misaki.espeak import EspeakFallback
+from misaki.zh import ZHG2P
+ZHG2P(version='1.1', en_callable=lambda text: 'test')
+EspeakFallback(british=False, version='1.1')
+PY
+then
+  echo '[4/10] 安装/更新 Kokoro + 中英 G2P + Edge TTS 依赖'
+  .venv/bin/python -m pip uninstall -y kokoro >/dev/null 2>&1 || true
   .venv/bin/python -m pip install -r requirements.txt
   echo "$REQ_HASH" > .requirements.sha256
 else
-  echo '[4/9] Python 依赖已就绪'
+  echo '[4/10] 双引擎 Python 依赖已就绪'
 fi
 
-if ! .venv/bin/python -c 'from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null 2>&1; then
-  echo '[4/9] 修复 Misaki 中文 G2P'
-  .venv/bin/python -m pip uninstall -y misaki misaki-fork >/dev/null 2>&1 || true
-  SITE_PACKAGES="$(.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')"
-  rm -rf "$SITE_PACKAGES/misaki" "$SITE_PACKAGES"/misaki-*.dist-info "$SITE_PACKAGES"/misaki_fork-*.dist-info
-  .venv/bin/python -m pip install --no-cache-dir --force-reinstall 'misaki-fork[zh]==0.9.6'
-fi
-.venv/bin/python -c 'from misaki.zh import ZHG2P; ZHG2P(version="1.1")' >/dev/null
-echo '[4/9] 中文 G2P 验证通过'
+.venv/bin/python - <<'PY' >/dev/null
+import edge_tts, espeakng_loader, phonemizer
+from misaki.espeak import EspeakFallback
+from misaki.zh import ZHG2P
+fallback = EspeakFallback(british=False, version='1.1')
+def en_callable(text):
+    from types import SimpleNamespace
+    return fallback(SimpleNamespace(text=text))[0] or ''
+ZHG2P(version='1.1', en_callable=en_callable)
+PY
+echo '[4/10] 中英混读 G2P + Edge TTS 导入验证通过'
 
 MODEL_FILE="models/kokoro-v1.1-zh.onnx"
 VOICES_FILE="models/voices-v1.1-zh.bin"
@@ -101,11 +110,11 @@ download_atomic() {
   local tmp="${dest}.part" size=0
   if [ -f "$dest" ]; then size="$(stat -c%s "$dest" 2>/dev/null || echo 0)"; fi
   if [ "$size" -ge "$min_bytes" ]; then
-    echo "[5/9] ${label} 已存在 ($(du -h "$dest" | awk '{print $1}'))"
+    echo "[5/10] ${label} 已存在 ($(du -h "$dest" | awk '{print $1}'))"
     return 0
   fi
 
-  echo "[5/9] 下载 ${label}"
+  echo "[5/10] 下载 ${label}"
   rm -f "$tmp"
   if command -v curl >/dev/null 2>&1; then
     curl -fL --retry 12 --retry-all-errors --retry-delay 2 --connect-timeout 20 --speed-time 60 --speed-limit 1024 -o "$tmp" "$url"
@@ -122,11 +131,11 @@ download_atomic() {
     exit 1
   fi
   mv -f "$tmp" "$dest"
-  echo "[5/9] ${label} 下载完成 ($(du -h "$dest" | awk '{print $1}'))"
+  echo "[5/10] ${label} 下载完成 ($(du -h "$dest" | awk '{print $1}'))"
 }
 
 download_atomic "$MODEL_FILE" 300000000 "$MODEL_URL" 'Kokoro v1.1-zh 官方中文 FP32 ONNX'
-download_atomic "$VOICES_FILE" 53000000 "$VOICES_URL" 'Kokoro v1.1-zh 音色包'
+download_atomic "$VOICES_FILE" 53000000 "$VOICES_URL" 'Kokoro v1.1-zh 103 音色包'
 download_atomic "$CONFIG_FILE" 1000 "$CONFIG_URL" 'Kokoro v1.1-zh config.json'
 
 ACTUAL_BYTES="$(stat -c%s "$MODEL_FILE")"
@@ -136,7 +145,7 @@ if [ "$ACTUAL_BYTES" -ne "$MODEL_BYTES" ] || [ "$ACTUAL_SHA" != "$MODEL_SHA256" 
   rm -f "$MODEL_FILE"
   exit 1
 fi
-echo '[5/9] FP32 模型大小与 SHA256 校验通过'
+echo '[5/10] FP32 模型大小与 SHA256 校验通过'
 
 set_env_value() {
   local key="$1" value="$2"
@@ -160,7 +169,7 @@ set_env_value KOKORO_ONNX_MODEL "${PROJECT_DIR}/${MODEL_FILE}"
 set_env_value KOKORO_ONNX_VOICES "${PROJECT_DIR}/${VOICES_FILE}"
 set_env_value KOKORO_ONNX_CONFIG "${PROJECT_DIR}/${CONFIG_FILE}"
 chmod 600 .env
-echo '[6/9] 运行配置已更新'
+echo '[6/10] 运行配置已更新'
 
 SELFTEST_JSON="$PROJECT_DIR/logs/last-selfcheck.json"
 write_selfcheck() {
@@ -169,51 +178,56 @@ write_selfcheck() {
 import json, os
 from datetime import datetime
 data = {
-    "status": os.environ["SELF_STATUS"],
-    "stage": os.environ["SELF_STAGE"],
-    "message": os.environ["SELF_MESSAGE"],
-    "task_id": os.environ.get("SELF_TASK_ID") or None,
-    "commit": os.environ.get("SELF_COMMIT") or None,
-    "updated_at": datetime.now().isoformat(timespec="seconds"),
+    'status': os.environ['SELF_STATUS'],
+    'stage': os.environ['SELF_STAGE'],
+    'message': os.environ['SELF_MESSAGE'],
+    'task_id': os.environ.get('SELF_TASK_ID') or None,
+    'commit': os.environ.get('SELF_COMMIT') or None,
+    'updated_at': datetime.now().isoformat(timespec='seconds'),
 }
-with open(os.environ["SELF_PATH"], "w", encoding="utf-8") as f:
+with open(os.environ['SELF_PATH'], 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False)
 PY
 }
 
-write_selfcheck running direct_model "正在执行官方中文模型直连自检"
+MIXED_TEXT='今天我们测试 LangChain、RAG、Agent、MCP、LLM 和 API 的中英文混合语音。'
+KOKORO_DIRECT="$PROJECT_DIR/data/audio/deploy-kokoro-mixed-selftest.wav"
+EDGE_DIRECT="$PROJECT_DIR/data/audio/deploy-edge-mixed-selftest.mp3"
+rm -f "$KOKORO_DIRECT" "$EDGE_DIRECT"
+write_selfcheck running direct_dual "正在执行 Kokoro 中英混读 + Edge 在线双引擎直连自检"
 
-SELFTEST_FILE="$PROJECT_DIR/data/audio/deploy-selftest.wav"
-rm -f "$SELFTEST_FILE"
-echo '[7/9] 执行官方中文模型直连自检'
-PROJECT_DIR="$PROJECT_DIR" .venv/bin/python - <<'PY'
+echo '[7/10] Kokoro 中英混读真实生成'
+PROJECT_DIR="$PROJECT_DIR" MIXED_TEXT="$MIXED_TEXT" .venv/bin/python - <<'PY'
 from pathlib import Path
 import os, time
-import soundfile as sf
-from misaki.zh import ZHG2P
-from kokoro_onnx import Kokoro
-
+from app.dual_tts import generate_kokoro
 root = Path(os.environ['PROJECT_DIR'])
-model = root / 'models' / 'kokoro-v1.1-zh.onnx'
-voices = root / 'models' / 'voices-v1.1-zh.bin'
-config = root / 'models' / 'config.json'
-out = root / 'data' / 'audio' / 'deploy-selftest.wav'
-
+out = root / 'data' / 'audio' / 'deploy-kokoro-mixed-selftest.wav'
 start = time.perf_counter()
-g2p = ZHG2P(version='1.1')
-kokoro = Kokoro(str(model), str(voices), vocab_config=str(config))
-phonemes, _ = g2p('千里之行，始于足下。')
-samples, sample_rate = kokoro.create(phonemes, voice='zf_001', speed=1.0, is_phonemes=True)
-sf.write(str(out), samples, sample_rate)
-elapsed = time.perf_counter() - start
-if out.stat().st_size <= 44:
-    raise RuntimeError('selftest WAV is empty')
-print(f'[SELFTEST-DIRECT] OK elapsed={elapsed:.2f}s file={out} bytes={out.stat().st_size}')
+duration = generate_kokoro(os.environ['MIXED_TEXT'], 'zf_001', 1.0, out)
+if not out.exists() or out.stat().st_size <= 44:
+    raise RuntimeError('Kokoro mixed-language selftest WAV is empty')
+print(f'[SELFTEST-KOKORO] OK elapsed={time.perf_counter()-start:.2f}s audio={duration:.2f}s bytes={out.stat().st_size}')
 PY
-[ -s "$SELFTEST_FILE" ] || { write_selfcheck failed direct_model "官方中文模型直连自检没有生成 WAV"; exit 1; }
-write_selfcheck running api_startup "模型直连自检成功，正在重启 API"
+[ -s "$KOKORO_DIRECT" ] || { write_selfcheck failed direct_kokoro "Kokoro 中英混读没有生成 WAV"; exit 1; }
 
-echo '[8/9] 重启 Project5 API'
+echo '[8/10] Edge TTS 中英混读真实生成'
+PROJECT_DIR="$PROJECT_DIR" MIXED_TEXT="$MIXED_TEXT" .venv/bin/python - <<'PY'
+from pathlib import Path
+import os, time
+from app.dual_tts import generate_edge
+root = Path(os.environ['PROJECT_DIR'])
+out = root / 'data' / 'audio' / 'deploy-edge-mixed-selftest.mp3'
+start = time.perf_counter()
+duration = generate_edge(os.environ['MIXED_TEXT'], 'zh-CN-XiaoxiaoNeural', 1.0, out)
+if not out.exists() or out.stat().st_size <= 512:
+    raise RuntimeError('Edge mixed-language selftest MP3 is empty')
+print(f'[SELFTEST-EDGE] OK elapsed={time.perf_counter()-start:.2f}s audio={duration:.2f}s bytes={out.stat().st_size}')
+PY
+[ -s "$EDGE_DIRECT" ] || { write_selfcheck failed direct_edge "Edge TTS 没有生成 MP3，请检查服务器外网连接"; exit 1; }
+
+write_selfcheck running api_startup "Kokoro/Edge 直连均成功，正在重启双引擎 API"
+echo '[9/10] 重启 Project5 API'
 bash scripts/restart.sh
 
 set -a
@@ -235,69 +249,83 @@ if [ "$READY" -ne 1 ]; then
   echo '[ERROR] API 在 240 秒内没有进入 ready'
   curl -s "http://127.0.0.1:${PORT}/runtime" || true
   echo
-  tail -n 160 logs/app.log || true
+  tail -n 180 logs/app.log || true
   exit 1
 fi
 
-echo '[8/9] API ready，开始真实 HTTP 生成自检'
-write_selfcheck running api_generation "API 已 ready，正在通过 /admin/speech 创建真实生成任务"
+echo '[10/10] 通过真实 HTTP API 同时提交 Kokoro + Edge 两个任务'
+write_selfcheck running api_dual_generation "API ready，正在执行双引擎 HTTP 生成测试"
 
-SUBMIT_RESPONSE="$(curl -fsS \
-  -X POST "http://127.0.0.1:${PORT}/admin/speech" \
-  -H "X-Admin-Key: ${ADMIN_KEY}" \
-  -H 'Content-Type: application/json' \
-  --data '{"input":"你好，这是 Project5 部署后的 API 生成自检。","voice":"zf_001","speed":1.0}')"
+KOKORO_SUBMIT="$(curl -fsS -X POST "http://127.0.0.1:${PORT}/admin/speech" \
+  -H "X-Admin-Key: ${ADMIN_KEY}" -H 'Content-Type: application/json' \
+  --data '{"input":"今天测试 LangChain、RAG、Agent、MCP 和 API。","engine":"kokoro","voice":"zf_001","speed":1.0}')"
+EDGE_SUBMIT="$(curl -fsS -X POST "http://127.0.0.1:${PORT}/admin/speech" \
+  -H "X-Admin-Key: ${ADMIN_KEY}" -H 'Content-Type: application/json' \
+  --data '{"input":"今天测试 LangChain、RAG、Agent、MCP 和 API。","engine":"edge","voice":"zh-CN-XiaoxiaoNeural","speed":1.0}')"
 
-TASK_ID="$(printf '%s' "$SUBMIT_RESPONSE" | .venv/bin/python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))')"
-[ -n "$TASK_ID" ] || {
-  write_selfcheck failed api_generation "API 没有返回 task_id"
-  echo "[ERROR] /admin/speech 没有返回 task_id: $SUBMIT_RESPONSE"
+KOKORO_TASK="$(printf '%s' "$KOKORO_SUBMIT" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+EDGE_TASK="$(printf '%s' "$EDGE_SUBMIT" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+if [ -z "$KOKORO_TASK" ] || [ -z "$EDGE_TASK" ]; then
+  write_selfcheck failed api_dual_generation "双引擎 API 没有同时返回 task_id"
+  echo "[ERROR] Kokoro submit=$KOKORO_SUBMIT"
+  echo "[ERROR] Edge submit=$EDGE_SUBMIT"
   exit 1
-}
+fi
 
-echo "[SELFTEST-API] task_id=${TASK_ID}"
-write_selfcheck running api_generation "真实 API 任务已创建，等待 completed" "$TASK_ID"
+echo "[SELFTEST-API] kokoro=${KOKORO_TASK} edge=${EDGE_TASK}"
+write_selfcheck running api_dual_generation "双引擎任务已创建，等待两边都 completed" "${KOKORO_TASK},${EDGE_TASK}"
 
+K_DONE=0
+E_DONE=0
 for i in {1..600}; do
-  TASK_JSON="$(curl -fsS \
-    -H "X-Admin-Key: ${ADMIN_KEY}" \
-    "http://127.0.0.1:${PORT}/admin/tasks/${TASK_ID}" 2>/dev/null || true)"
-  TASK_STATUS="$(printf '%s' "$TASK_JSON" | .venv/bin/python -c 'import json,sys
-try:
- d=json.load(sys.stdin); print(d.get("status",""))
-except Exception:
- print("")')"
+  K_JSON="$(curl -fsS -H "X-Admin-Key: ${ADMIN_KEY}" "http://127.0.0.1:${PORT}/admin/tasks/${KOKORO_TASK}" 2>/dev/null || true)"
+  E_JSON="$(curl -fsS -H "X-Admin-Key: ${ADMIN_KEY}" "http://127.0.0.1:${PORT}/admin/tasks/${EDGE_TASK}" 2>/dev/null || true)"
 
-  if [ "$TASK_STATUS" = "completed" ]; then
-    AUDIO_FILENAME="$(printf '%s' "$TASK_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("audio_filename",""))')"
-    [ -n "$AUDIO_FILENAME" ] || {
-      write_selfcheck failed api_generation "任务 completed 但没有 audio_filename" "$TASK_ID"
-      exit 1
-    }
-    API_AUDIO="$PROJECT_DIR/data/audio/$AUDIO_FILENAME"
-    API_BYTES="$(stat -c%s "$API_AUDIO" 2>/dev/null || echo 0)"
-    if [ "$API_BYTES" -le 44 ]; then
-      write_selfcheck failed api_generation "任务 completed 但 WAV 文件无效" "$TASK_ID"
-      exit 1
-    fi
-    write_selfcheck success complete "模型直连 + API 异步任务 + WAV 文件全部自检成功，bytes=${API_BYTES}" "$TASK_ID"
-    echo "[SUCCESS] API 真实生成成功 task=${TASK_ID} file=${AUDIO_FILENAME} bytes=${API_BYTES}"
-    echo "Bootstrap success: $(date '+%Y-%m-%d %H:%M:%S') task=${TASK_ID}" >> logs/deploy.log
-    echo '[9/9] Project5 全链路自检通过'
-    exit 0
+  K_STATUS="$(printf '%s' "$K_JSON" | .venv/bin/python -c 'import json,sys
+try: print(json.load(sys.stdin).get("status",""))
+except Exception: print("")')"
+  E_STATUS="$(printf '%s' "$E_JSON" | .venv/bin/python -c 'import json,sys
+try: print(json.load(sys.stdin).get("status",""))
+except Exception: print("")')"
+
+  if [ "$K_STATUS" = "failed" ]; then
+    ERR="$(printf '%s' "$K_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("error","unknown"))')"
+    write_selfcheck failed api_kokoro "$ERR" "$KOKORO_TASK"
+    echo "[ERROR] Kokoro API 自检失败: $ERR"
+    tail -n 180 logs/app.log || true
+    exit 1
+  fi
+  if [ "$E_STATUS" = "failed" ]; then
+    ERR="$(printf '%s' "$E_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("error","unknown"))')"
+    write_selfcheck failed api_edge "$ERR" "$EDGE_TASK"
+    echo "[ERROR] Edge API 自检失败: $ERR"
+    tail -n 180 logs/app.log || true
+    exit 1
   fi
 
-  if [ "$TASK_STATUS" = "failed" ]; then
-    TASK_ERROR="$(printf '%s' "$TASK_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("error","unknown error"))')"
-    write_selfcheck failed api_generation "$TASK_ERROR" "$TASK_ID"
-    echo "[ERROR] API 自检任务失败: $TASK_ERROR"
-    tail -n 160 logs/app.log || true
-    exit 1
+  [ "$K_STATUS" = "completed" ] && K_DONE=1
+  [ "$E_STATUS" = "completed" ] && E_DONE=1
+
+  if [ "$K_DONE" -eq 1 ] && [ "$E_DONE" -eq 1 ]; then
+    K_FILE="$(printf '%s' "$K_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("audio_filename",""))')"
+    E_FILE="$(printf '%s' "$E_JSON" | .venv/bin/python -c 'import json,sys; print(json.load(sys.stdin).get("audio_filename",""))')"
+    K_BYTES="$(stat -c%s "$PROJECT_DIR/data/audio/$K_FILE" 2>/dev/null || echo 0)"
+    E_BYTES="$(stat -c%s "$PROJECT_DIR/data/audio/$E_FILE" 2>/dev/null || echo 0)"
+    if [ "$K_BYTES" -le 44 ] || [ "$E_BYTES" -le 512 ]; then
+      write_selfcheck failed api_dual_generation "任务 completed 但音频文件无效" "${KOKORO_TASK},${EDGE_TASK}"
+      exit 1
+    fi
+    write_selfcheck success complete "Kokoro 中英混读 + Edge 在线 TTS + 双引擎 API 全部真实生成成功；kokoro=${K_BYTES}B edge=${E_BYTES}B" "${KOKORO_TASK},${EDGE_TASK}"
+    echo "[SUCCESS] Kokoro task=${KOKORO_TASK} file=${K_FILE} bytes=${K_BYTES}"
+    echo "[SUCCESS] Edge task=${EDGE_TASK} file=${E_FILE} bytes=${E_BYTES}"
+    echo "Bootstrap success: $(date '+%Y-%m-%d %H:%M:%S') kokoro=${KOKORO_TASK} edge=${EDGE_TASK}" >> logs/deploy.log
+    echo '[SUCCESS] Project5 双引擎全链路自检通过'
+    exit 0
   fi
   sleep 1
 done
 
-write_selfcheck failed api_generation "API 自检任务 600 秒内没有完成" "$TASK_ID"
-echo "[ERROR] API 自检任务超时 task=${TASK_ID}"
-tail -n 160 logs/app.log || true
+write_selfcheck failed api_dual_generation "双引擎 API 自检 600 秒内没有全部完成" "${KOKORO_TASK},${EDGE_TASK}"
+echo '[ERROR] 双引擎 API 自检超时'
+tail -n 180 logs/app.log || true
 exit 1
