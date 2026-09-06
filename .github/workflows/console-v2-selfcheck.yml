@@ -1,0 +1,48 @@
+name: Project5 Dual Console Selfcheck
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python syntax
+        run: |
+          python -m py_compile app/entry.py app/tts.py app/dual_tts.py
+
+      - name: Explicit dual-engine console structure
+        run: |
+          grep -q 'Kokoro 本地试听' app/static/console-v2.html
+          grep -q 'Edge 在线试听' app/static/console-v2.html
+          grep -q 'Kokoro · WAV' app/static/console-v2.html
+          grep -q 'Edge · MP3' app/static/console-v2.html
+          grep -q '/v1/voices?engine=kokoro' app/static/console-v2.html
+          grep -q '/v1/voices?engine=edge' app/static/console-v2.html
+          grep -q '"engine":"kokoro"' app/static/console-v2.html
+          grep -q '"engine":"edge"' app/static/console-v2.html
+          grep -q 'console-v2.html' app/entry.py
+          grep -q 'dual-engine-v2' app/entry.py
+
+      - name: Inline JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path('app/static/console-v2.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script>(.*?)</script>', html, re.S)
+          assert scripts, 'no inline script found'
+          Path('/tmp/project5-console-v2.js').write_text('\n'.join(scripts), encoding='utf-8')
+          PY
+          node --check /tmp/project5-console-v2.js
+
+      - name: Native mixed-language engine wiring
+        run: |
+          grep -q 'ZHG2P(version="1.1", en_callable=english_callable)' app/tts.py
+          grep -q 'misaki-espeak-fallback' app/tts.py
+          grep -q 'mixed_zh_en' app/tts.py
