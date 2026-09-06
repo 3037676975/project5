@@ -23,6 +23,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install httpx
 
       - name: Python syntax
         run: python -m compileall -q app
@@ -143,4 +144,58 @@ jobs:
                   if attempt == 3:
                       raise
                   time.sleep(attempt * 2)
+          PY
+
+      - name: Real FastAPI dual-engine task flow
+        env:
+          ADMIN_KEY: ci-project5-admin
+          KOKORO_THREADS: '4'
+        run: |
+          rm -f data/project5.db
+          mkdir -p data/audio logs
+          python - <<'PY'
+          import time
+          from pathlib import Path
+          from fastapi.testclient import TestClient
+          from app.entry import app
+
+          headers = {'X-Admin-Key': 'ci-project5-admin'}
+          text = '今天通过 Project5 API 测试 LangChain、RAG、Agent、MCP 和 API。'
+
+          def wait(client, task_id):
+              deadline = time.time() + 120
+              while time.time() < deadline:
+                  r = client.get(f'/admin/tasks/{task_id}', headers=headers)
+                  assert r.status_code == 200, r.text
+                  task = r.json()
+                  if task['status'] == 'completed':
+                      return task
+                  if task['status'] == 'failed':
+                      raise RuntimeError(task.get('error'))
+                  time.sleep(0.5)
+              raise TimeoutError(task_id)
+
+          with TestClient(app) as client:
+              h = client.get('/health')
+              assert h.status_code == 200, h.text
+              voices = client.get('/v1/voices?engine=edge')
+              assert voices.status_code == 200 and voices.json()['voices']
+
+              k = client.post('/admin/speech', headers=headers, json={
+                  'input': text, 'engine': 'kokoro', 'voice': 'zf_001', 'speed': 1.0,
+              })
+              e = client.post('/admin/speech', headers=headers, json={
+                  'input': text, 'engine': 'edge', 'voice': 'zh-CN-XiaoxiaoNeural', 'speed': 1.0,
+              })
+              assert k.status_code == 202, k.text
+              assert e.status_code == 202, e.text
+
+              kt = wait(client, k.json()['id'])
+              et = wait(client, e.json()['id'])
+              assert kt['engine'] == 'kokoro' and kt['audio_filename'].endswith('.wav')
+              assert et['engine'] == 'edge' and et['audio_filename'].endswith('.mp3')
+              assert Path('data/audio', kt['audio_filename']).stat().st_size > 44
+              assert Path('data/audio', et['audio_filename']).stat().st_size > 512
+              print('api-kokoro-ok', kt['id'], kt['elapsed_ms'], kt['audio_filename'])
+              print('api-edge-ok', et['id'], et['elapsed_ms'], et['audio_filename'])
           PY
