@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.pid
+.requirements.sha256
+.huggingface/
+.cache/
+data/project5.db
+data/project5.db-*
+data/audio/*
+!data/audio/.gitkeep
+logs/*
+!logs/.gitkeep
