@@ -67,6 +67,19 @@ jobs:
               assert initial['mode'] == 'manual-persistent'
               assert initial['counts']['kokoro']['ready'] == 0
 
+              notes = client.get('/admin/voice-notes', headers=headers)
+              assert notes.status_code == 200, notes.text
+              assert notes.json()['mode'] == 'server-persistent'
+              assert notes.json()['notes']['kokoro'] == {}
+
+              saved_note = client.put('/admin/voice-notes', headers=headers, json={
+                  'engine': 'kokoro', 'voice': 'zf_001', 'note': '温柔，适合播客女声；英文自然'
+              })
+              assert saved_note.status_code == 200, saved_note.text
+              assert saved_note.json()['notes']['kokoro']['zf_001']['note'].startswith('温柔')
+              reread_note = client.get('/admin/voice-notes?engine=kokoro', headers=headers).json()
+              assert reread_note['notes']['kokoro']['zf_001']['note'] == '温柔，适合播客女声；英文自然'
+
               text1 = '你好，today we test ChatGPT，然后继续聊天。'
               saved = client.put('/admin/previews/text', headers=headers, json={'text': text1})
               assert saved.status_code == 200, saved.text
@@ -109,8 +122,14 @@ jobs:
           print('manual-preview-persistent-flow-ok')
           PY
 
-      - name: No automatic preview builder remains
+      - name: No automatic preview or English deploy worker remains
         run: |
+          python -m py_compile app/voice_notes.py
+          node --check app/static/preview-admin.js
+          bash -n scripts/auto-deploy.sh
           test ! -e scripts/build-voice-previews.py
           ! grep -q 'nohup.*build-voice-previews.py' scripts/setup-kokoro-english.sh
+          ! grep -q 'nohup.*setup-kokoro-english.sh' scripts/auto-deploy.sh
+          grep -q 'Webhook 已接收' scripts/auto-deploy.sh
           grep -q 'manual-persistent-v1' app/entry.py
+          grep -q '/admin/voice-notes' app/voice_notes.py
