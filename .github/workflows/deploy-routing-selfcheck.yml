@@ -43,6 +43,37 @@ jobs:
           grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
           grep -q 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf"
           ! grep -q 'try_files' "$TMP/vhost/project5.conf"
+          test "$(grep -c '^[[:space:]]*location /' "$TMP/vhost/project5.conf")" -eq 1
+
+      - name: Reproduce existing marker inside location slash
+        run: |
+          TMP="$(mktemp -d)"
+          mkdir -p "$TMP/vhost" "$TMP/bin"
+          cat > "$TMP/vhost/project5.conf" <<'EOF'
+          server {
+              listen 28442;
+              server_name 127.0.0.1;
+              root /www/wwwroot/project5;
+              location / {
+                  # PROJECT5-AUTO-PROXY-START
+                  proxy_pass http://127.0.0.1:7999;
+                  # PROJECT5-AUTO-PROXY-END
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+          EOF
+          cat > "$TMP/bin/nginx" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          chmod +x "$TMP/bin/nginx"
+          BT_NGINX_VHOST_DIR="$TMP/vhost" PROJECT5_PUBLIC_PORT=28442 PROJECT5_PORT=8005 PATH="$TMP/bin:$PATH" bash scripts/ensure-baota-proxy.sh
+          test "$(grep -c '^[[:space:]]*location /' "$TMP/vhost/project5.conf")" -eq 1
+          test "$(grep -c 'PROJECT5-AUTO-PROXY-START' "$TMP/vhost/project5.conf")" -eq 1
+          test "$(grep -c 'PROJECT5-AUTO-PROXY-END' "$TMP/vhost/project5.conf")" -eq 1
+          grep -q 'proxy_pass http://127.0.0.1:8005;' "$TMP/vhost/project5.conf"
+          ! grep -q '127.0.0.1:7999' "$TMP/vhost/project5.conf"
+          ! grep -q 'try_files' "$TMP/vhost/project5.conf"
 
       - name: Reproduce BaoTa included location slash case
         run: |
