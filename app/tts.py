@@ -42,12 +42,15 @@ def voice_meta(voice: str) -> dict:
 
 
 class KokoroEngine:
-    """CPU-optimized Kokoro-82M-v1.1-zh inference engine.
+    """Stable CPU Kokoro-82M-v1.1-zh engine.
 
-    The model stays resident in memory for the lifetime of the Uvicorn process.
-    ONNX Runtime gets an explicit CPU session configuration instead of relying on
-    platform defaults, and a short warm-up inference is performed at startup so
-    the first real browser/API request does not pay graph/kernel initialization.
+    Important: keep the upstream kokoro-onnx constructor as the compatibility
+    baseline. A previous optimization created an InferenceSession manually and
+    performed a mandatory warm-up before marking the engine ready. On this server
+    that made a load/warm-up failure look like an endless "loading" state and all
+    subsequent TTS tasks failed. This version deliberately favors the previously
+    working code path first; performance tuning can be reintroduced only after the
+    baseline is proven healthy.
     """
 
     def __init__(self) -> None:
@@ -57,7 +60,7 @@ class KokoroEngine:
         self.loading = False
         self.load_error: str | None = None
         self.device = "cpu"
-        self.backend = "onnx-int8"
+        self.backend = "onnx-int8-stable"
         requested_threads = int(os.getenv("KOKORO_THREADS", str(min(8, os.cpu_count() or 4))))
         self.threads = max(1, min(requested_threads, os.cpu_count() or requested_threads))
         self.last_metrics: dict = {}
@@ -71,12 +74,12 @@ class KokoroEngine:
         with self._load_lock:
             if self.loaded:
                 return
+
             self.loading = True
             self.load_error = None
             started = time.perf_counter()
             print(
-                f"[Project5] Loading Kokoro ONNX INT8: {MODEL_PATH} "
-                f"threads={self.threads}",
+                f"[Project5] Loading stable Kokoro ONNX INT8: {MODEL_PATH} threads={self.threads}",
                 flush=True,
             )
             try:
@@ -86,74 +89,47 @@ class KokoroEngine:
                         "Kokoro ONNX files are missing: " + ", ".join(missing) + ". Run scripts/auto-deploy.sh."
                     )
 
-                # Keep CPU scheduling predictable on small cloud VMs.
+                # Set thread hints before kokoro_onnx imports/creates ONNX Runtime.
+                # PASSIVE is safer on a shared 8-core CPU VM than aggressive spinning.
                 os.environ["OMP_NUM_THREADS"] = str(self.threads)
-                os.environ["OMP_WAIT_POLICY"] = "ACTIVE"
+                os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
                 os.environ["ORT_NUM_THREADS"] = str(self.threads)
 
-                import onnxruntime as ort
                 from kokoro_onnx import Kokoro
-                # Import the concrete submodule, not `from misaki import zh`.
-                # misaki-fork can coexist with stale/namespace `misaki` installs,
-                # where the package-level import fails even though misaki.zh exists.
+                # Import the concrete Chinese submodule. This remains compatible
+                # when a stale namespace-style `misaki` package is present.
                 from misaki.zh import ZHG2P
 
-                options = ort.SessionOptions()
-                options.intra_op_num_threads = self.threads
-                options.inter_op_num_threads = 1
-                options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                options.enable_cpu_mem_arena = True
-                options.enable_mem_pattern = True
-                try:
-                    options.add_session_config_entry("session.intra_op.allow_spinning", "1")
-                except Exception:
-                    pass
-
-                session_started = time.perf_counter()
-                session = ort.InferenceSession(
-                    str(MODEL_PATH),
-                    sess_options=options,
-                    providers=["CPUExecutionProvider"],
-                )
-                session_seconds = time.perf_counter() - session_started
-
                 self.g2p = ZHG2P(version="1.1")
-                self.model = Kokoro.from_session(
-                    session,
+
+                # Use kokoro-onnx's normal constructor. It owns session creation,
+                # model validation and vocabulary setup. This is the path that was
+                # already producing audio on Project5 before the manual-session
+                # optimization was introduced.
+                self.model = Kokoro(
+                    str(MODEL_PATH),
                     str(VOICES_PATH),
                     vocab_config=str(CONFIG_PATH),
                 )
 
-                # Warm up the exact Chinese path used by normal requests. This cost is
-                # paid once at process start instead of on the first user click.
-                warm_started = time.perf_counter()
-                warm_phonemes, _ = self.g2p("你好，这是语音服务预热。")
-                self.model.create(
-                    warm_phonemes,
-                    voice="zf_001",
-                    speed=1.0,
-                    is_phonemes=True,
-                )
-                warm_seconds = time.perf_counter() - warm_started
-
+                # Do NOT make startup warm-up a readiness requirement. Mark the
+                # engine ready as soon as the model and G2P are constructed. The
+                # first inference may be slower, but a warm-up failure can no longer
+                # permanently hide the real error behind "模型加载中".
                 self.loaded = True
-                total_seconds = time.perf_counter() - started
+                elapsed = time.perf_counter() - started
                 self.load_metrics = {
                     "backend": self.backend,
                     "threads": self.threads,
-                    "session_ms": round(session_seconds * 1000),
-                    "warmup_ms": round(warm_seconds * 1000),
-                    "total_ms": round(total_seconds * 1000),
+                    "total_ms": round(elapsed * 1000),
                 }
                 print(
-                    "[Project5] Kokoro ONNX ready: "
-                    f"session={session_seconds:.2f}s warmup={warm_seconds:.2f}s "
-                    f"total={total_seconds:.2f}s threads={self.threads}",
+                    f"[Project5] Stable Kokoro ONNX ready in {elapsed:.2f}s threads={self.threads}",
                     flush=True,
                 )
             except Exception as exc:
                 self.load_error = f"{type(exc).__name__}: {exc}"
+                self.loaded = False
                 print(f"[Project5] Kokoro ONNX load failed: {self.load_error}", flush=True)
                 raise
             finally:
@@ -168,6 +144,7 @@ class KokoroEngine:
         try:
             self.load()
         except Exception:
+            # load_error is preserved for health/admin diagnostics.
             pass
 
     @staticmethod
@@ -200,6 +177,8 @@ class KokoroEngine:
         if self.g2p is None:
             raise RuntimeError("Chinese G2P is not loaded")
         phonemes, _ = self.g2p(text)
+        if not phonemes or not phonemes.strip():
+            raise RuntimeError("Chinese G2P returned empty phonemes")
         return phonemes
 
     def generate(self, text: str, voice: str, speed: float, output_path: Path) -> float:
@@ -284,5 +263,5 @@ class KokoroEngine:
 
 
 engine = KokoroEngine()
-# Model and voices are local files. Preload and warm up once in the background.
+# Model and voices are local files. Load once in the background. No mandatory warm-up.
 engine.start_background_load()
