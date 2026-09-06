@@ -307,12 +307,20 @@
     });
   }
 
-  // New console features live in a separate first-class module so the existing
-  // TTS page remains stable. This loader is itself part of the verified frontend.
+  // New console features live in separate first-class modules so the existing
+  // TTS page remains stable. These loaders are part of the verified frontend.
   if (!document.getElementById('project5VoiceLibraryScript')) {
     const script = document.createElement('script');
     script.id = 'project5VoiceLibraryScript';
     script.src = '/static/voice-library.js?v=voice-library-retention-v1';
+    script.async = false;
+    document.body.appendChild(script);
+  }
+
+  if (!document.getElementById('project5ApiKeyUiScript')) {
+    const script = document.createElement('script');
+    script.id = 'project5ApiKeyUiScript';
+    script.src = '/static/api-key-ui.js?v=api-key-ui-v1';
     script.async = false;
     document.body.appendChild(script);
   }
