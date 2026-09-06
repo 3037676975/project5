@@ -147,15 +147,12 @@ run_case '嗨，今天聊点轻松的。I really like simple tools that just wor
 
 echo '[Kokoro-English][OK] 官方英文 G2P + soft-join + 真实生成全部通过'
 
-# Build one fixed bilingual preview per voice in the background. This is deliberately
-# outside the deployment success path: the site is usable immediately, while the
-# 103 Kokoro + Edge voice previews fill in gradually and are cached permanently.
-PREVIEW_LOG="$PROJECT_DIR/logs/voice-preview.log"
-if command -v nice >/dev/null 2>&1; then
-  nohup nice -n 10 "$PY" "$PROJECT_DIR/scripts/build-voice-previews.py" >> "$PREVIEW_LOG" 2>&1 < /dev/null &
-else
-  nohup "$PY" "$PROJECT_DIR/scripts/build-voice-previews.py" >> "$PREVIEW_LOG" 2>&1 < /dev/null &
+# Fixed voice previews are now administrator-controlled. Stop any legacy builder
+# left from an older deployment, but never start preview synthesis automatically.
+if command -v pgrep >/dev/null 2>&1; then
+  while read -r preview_pid; do
+    [ -n "$preview_pid" ] || continue
+    kill "$preview_pid" >/dev/null 2>&1 || true
+  done < <(pgrep -f "$PROJECT_DIR/scripts/build-voice-previews.py" || true)
 fi
-PREVIEW_PID=$!
-disown "$PREVIEW_PID" 2>/dev/null || true
-echo "[Kokoro-English] 固定音色试听缓存已后台启动 pid=${PREVIEW_PID}，日志：logs/voice-preview.log"
+echo '[Kokoro-English] 固定试听改为手动模式：后台不会自动生成。请在控制台保存文案并手动生成当前/全部音色。'
